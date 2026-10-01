@@ -1,0 +1,11 @@
+{
+  "name": "f1-dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Pitwall – F1 Live-Dashboard mit Telemetrie, Funk und Session-abhängigen Ansichten",
+  "scripts": {
+    "start": "node serve.js",
+    "test": "node --test test/*.test.js"
+  }
+}
