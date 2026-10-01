@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { CaretRightFilled, PauseOutlined } from '@ant-design/icons';
 import chimeUrl from '../../media/F1 Radio - Notification Sound.mp3';
 import { audioUrl } from '../../js/transcribe.js';
+import { t, speechLang } from '../../js/i18n.js';
 import { BARS, estimateSpeech, fmtDur, loadPeaks, peaksFromText, pseudoPeaks } from '../../js/waveform.js';
 
 let stopCurrent = null; // es spielt immer nur ein Funkspruch
@@ -99,12 +100,12 @@ export function RadioPlayer({ m, color, proxy = null }) {
       if (token !== run.current) return;
     }
     if (isAudio) {
-      try { await audio.current.play(); } catch (e) { setError('Wiedergabe nicht möglich'); setPlaying(false); return; }
+      try { await audio.current.play(); } catch (e) { setError(t('radio.err.play')); setPlaying(false); return; }
     } else {
       const synth = window.speechSynthesis;
-      if (!synth) { setError('Sprachausgabe nicht verfügbar'); setPlaying(false); return; }
+      if (!synth) { setError(t('radio.err.speech')); setPlaying(false); return; }
       const u = new SpeechSynthesisUtterance(m.speech);
-      u.lang = 'de-DE';
+      u.lang = speechLang();
       u.onboundary = (e) => setProg((p) => Math.max(p, e.charIndex / m.speech.length));
       u.onend = finish; u.onerror = finish;
       speech.current.t0 = performance.now();
@@ -140,14 +141,14 @@ export function RadioPlayer({ m, color, proxy = null }) {
         <audio
           ref={audio} src={m.url} preload="none"
           onLoadedMetadata={(e) => { if (isFinite(e.target.duration)) setDur(e.target.duration); }}
-          onEnded={finish} onPause={() => setPlaying(false)} onPlay={() => setPlaying(true)} onError={() => setError('Audio nicht ladbar')}
+          onEnded={finish} onPause={() => setPlaying(false)} onPlay={() => setPlaying(true)} onError={() => setError(t('radio.err.audio'))}
         />
       )}
-      <button type="button" className="rp-btn" onClick={toggle} aria-label={playing ? 'Pausieren' : 'Abspielen'}>
+      <button type="button" className="rp-btn" onClick={toggle} aria-label={playing ? t('rb.pause') : t('radio.play')}>
         {playing ? <PauseOutlined /> : <CaretRightFilled />}
       </button>
       <div
-        className="rp-wave" ref={wrap} role="slider" tabIndex={0} aria-label="Wiedergabeposition" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(prog * 100)}
+        className="rp-wave" ref={wrap} role="slider" tabIndex={0} aria-label={t('radio.position')} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(prog * 100)}
         onClick={isAudio ? onWaveClick : undefined} onKeyDown={onWaveKey}
       >
         {peaks.map((p, i) => <i key={i} className={i < idx ? 'on' : i === idx && playing ? 'now' : ''} style={{ height: `${Math.round(p * 100)}%` }} />)}

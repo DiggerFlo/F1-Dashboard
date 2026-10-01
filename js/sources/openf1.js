@@ -7,6 +7,8 @@ import { samplePath } from '../svgpath.js';
 import { fitSimilarity } from '../fit.js';
 import { createJolpica, buildJolpicaCalendar } from './jolpica.js';
 import { createReplayBuffer } from './replay-buffer.js';
+import { createStaticCache, cacheKeyOf } from '../cache.js';
+import { t as tr, locale } from '../i18n.js';
 import { nearestFraction, aheadOf } from '../track.js';
 import { sectorFlagsFrom, stationaryTime } from '../pit.js';
 
@@ -18,7 +20,7 @@ const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
  * antwortet auf Abfragen ohne Treffer mit 404. Deshalb: Anfragen nacheinander, höchstens maxPerMinute innerhalb
  * von 60 s (gleitendes Fenster, mit Token deutlich mehr), bei 429/503 warten und wiederholen, 404 als leere Liste.
  */
-export function createOpenF1Client({ base = BASE, headers = {}, fetchImpl = (...a) => fetch(...a), minGap = 300, maxPerMinute = headers.Authorization ? 250 : 27, retries = 5, sleep = sleepMs, now = () => Date.now() } = {}) {
+export function createOpenF1Client({ base = BASE, headers = {}, fetchImpl = (...a) => fetch(...a), minGap = 340, maxPerMinute = headers.Authorization ? 250 : 28, retries = 5, sleep = sleepMs, now = () => Date.now() } = {}) {
   let chain = Promise.resolve();
   let last = 0, blockedUntil = 0;
   const stamps = [];
@@ -122,28 +124,27 @@ function sessionType(name = '') {
   return 'practice';
 }
 
-const dayTime = (t) => new Date(t).toLocaleString('de-CH', { weekday: 'short', hour: '2-digit', minute: '2-digit' });
-
 /**
  * Fasst Vorschau-Daten aus OpenF1 (nächste Session) und Jolpica (Rennen, Wertungen) zusammen.
  * Jolpica-Details zum Rennwochenende werden nur genutzt, wenn sie zur nächsten OpenF1-Session passen.
  */
 /** Kennzahlen eines Rennwochenendes aus einem Jolpica-Rennen. */
 export function raceFacts(race, total = 0) {
-  return [['Runde', `${race.round}${total ? ' von ' + total : ''}`], ['Strecke', race.circuitName], ['Ort', [race.location, race.country].filter(Boolean).join(', ')], ['Termin', new Date(race.start).toLocaleDateString('de-CH', { day: '2-digit', month: 'long' })]];
+  // Labels sind Schlüssel (fact.*), die Anzeige übersetzt sie; die Werte folgen der aktuellen Sprache
+  return [['fact.round', total ? tr('fact.roundOf', { round: race.round, total }) : String(race.round)], ['fact.circuit', race.circuitName], ['fact.place', [race.location, race.country].filter(Boolean).join(', ')], ['fact.date', new Date(race.start).toLocaleDateString(locale(), { day: '2-digit', month: 'long' })]];
 }
 
 export function mergeUpcoming(upcoming, extras, now = Date.now()) {
   const next = extras?.races?.find((r) => r.end > now) || null;
   let u = upcoming;
-  if (!u && next) u = { startsAt: next.start, nextLabel: 'Rennen', meeting: next.meeting, circuit: `${next.circuitName} · ${next.country}`, schedule: [] };
+  if (!u && next) u = { startsAt: next.start, nextLabel: 'sess.race', meeting: next.meeting, circuit: `${next.circuitName} · ${next.country}`, schedule: [] };
   if (!u) return null;
   const same = next && Math.abs(u.startsAt - next.start) < 4 * 86400000;
   const out = { ...u };
   if (same) {
     out.meeting = next.meeting;
     out.circuit = `${next.circuitName} · ${next.country}`;
-    if (!out.schedule?.length) out.schedule = next.sessions.map(([n, t]) => [n, dayTime(t)]);
+    if (!out.schedule?.length) out.schedule = next.sessions.map(([n, ts]) => [n, ts]); // Zeitpunkte, die Anzeige formatiert sie
     out.facts = raceFacts(next, extras.races.length);
   }
   if (extras?.drivers?.length) out.standings = extras.drivers.slice(0, 10);
@@ -152,23 +153,32 @@ export function mergeUpcoming(upcoming, extras, now = Date.now()) {
   return out;
 }
 
-export function createOpenF1Source({ token = null, speed = 8, wantType = null, sessionKey = null, jolpica = createJolpica(), client = null, replayOnly = false, circuitInfo = fetchCircuitInfo } = {}) {
+export function createOpenF1Source({ token = null, speed = 8, wantType = null, sessionKey = null, jolpica = createJolpica(), client = null, replayOnly = false, circuitInfo = fetchCircuitInfo, cache = createStaticCache() } = {}) {
   let timer = null, stopped = false, onState = null;
   let session = null, upcoming = null, replay = false;
   // Wiederholung: virtuelle Uhr (Start, Tempo, Pause) und Puffer mit den geladenen Zeitfenstern
   let clock = { base: 0, at: 0, speed, paused: false, hold: false };
   let buffer = null, weatherRows = [], pits = [], loadingNow = false;
   const stopSince = new Map(), stopCache = new Map(), stopLoading = new Set();
-  let stopBusy = 0; // laufende Einzelabfragen für Standzeiten (die Warteschlange ist knapp: höchstens 27 Anfragen pro Minute) // Ausfälle erkennen, Standzeiten der Boxenstopps
+  let stopBusy = 0; // laufende Einzelabfragen für Standzeiten (die Warteschlange ist knapp: höchstens 28 Anfragen pro Minute) // Ausfälle erkennen, Standzeiten der Boxenstopps
   let lastBuildNow = null;
   const windowLoads = new Map();
   if (replayOnly && !wantType && !sessionKey) wantType = 'race';
   let toTrack = (x, y) => [x, y], drivers = new Map(), carData = new Map(), loc = new Map(), pos = new Map(), intervals = new Map(), laps = [], stints = [], control = [], radioRows = [], weather = null, track = null;
-  let epoch = 0, pickedRace = null, pickedMeta = null, lastMedium = 0, lastSlow = 0, lastFast = 0, errors = 0, note = '', layoutNote = '', nextSession = null, extras = null;
+  let epoch = 0, pickedRace = null, pickedMeta = null, lastMedium = 0, lastSlow = 0, lastFast = 0, errors = 0, noteMsg = '', layoutNote = false, nextSession = null, extras = null;
 
   const rawGet = client || createOpenF1Client({ headers: token ? { Authorization: `Bearer ${token}` } : {} });
   // Anfragen gehören zur Session-Epoche, in der sie gestellt wurden; nach einem Wechsel werden wartende Anfragen verworfen
-  const get = (path) => { const my = epoch; return rawGet(path, () => my !== epoch); };
+  const pastKeys = new Set(); // Sessions, die lange genug vorbei sind, dass sich ihre Stammdaten nicht mehr ändern
+  const get = async (path) => {
+    const k = cacheKeyOf(path);
+    const cacheable = k != null && pastKeys.has(Number(k));
+    if (cacheable) { const hit = cache.read(path); if (hit !== undefined) return hit; }
+    const my = epoch;
+    const data = await rawGet(path, () => my !== epoch);
+    if (cacheable && Array.isArray(data) && data.length) cache.write(path, data);
+    return data;
+  };
   const vnow = () => (replay ? (clock.paused || clock.hold ? clock.base : clock.base + (Date.now() - clock.at) * clock.speed) : Date.now());
   const rebase = (patch = {}) => { clock = { ...clock, base: vnow(), at: Date.now(), ...patch }; };
   const sessionStart = () => Date.parse(session.date_start);
@@ -210,19 +220,18 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
     session = null; replay = false;
     nextSession = { circuit_short_name: r.circuit, location: r.location, country_name: r.country, year: r.year, date_start: iso(r.start) };
     const total = extras?.races?.length || 0;
-    upcoming = { startsAt: r.start, nextLabel: r.end < Date.now() ? 'Beendetes Rennen' : 'Rennen', meeting: r.meeting, circuit: `${r.circuitName || r.circuit} · ${r.country}`,
-      schedule: (r.sessions || []).map(([n, t]) => [n, new Date(t).toLocaleString('de-CH', { weekday: 'short', hour: '2-digit', minute: '2-digit' })]), facts: raceFacts(r, total) };
+    upcoming = { startsAt: r.start, nextLabel: r.end < Date.now() ? 'sess.raceDone' : 'sess.race', meeting: r.meeting, circuit: `${r.circuitName || r.circuit} · ${r.country}`,
+      schedule: (r.sessions || []).map(([n, ts]) => [n, ts]), get facts() { return raceFacts(r, total); } }; // facts als Getter: folgt der Sprache bei jedem Zustand
   }
 
   async function chooseSession() {
     if (pickedRace) { previewRace(pickedRace); return; }
     const year = new Date().getFullYear();
-    let list = await get(`sessions?year=${year}`);
     let chosen = null;
-    if (sessionKey) {
-      chosen = (await get(`sessions?session_key=${sessionKey}`))[0] || null;
-      if (chosen && !list.some((s) => s.session_key === chosen.session_key)) list = [...list, chosen];
-    }
+    if (sessionKey) chosen = (await get(`sessions?session_key=${sessionKey}`))[0] || null;
+    // Eine gewählte, schon beendete Session braucht weder die Jahresliste noch das Wochenende (spart 2 der knappen Anfragen)
+    let list = chosen && Date.parse(chosen.date_end) < Date.now() ? [chosen] : await get(`sessions?year=${year}`);
+    if (chosen && !list.some((s) => s.session_key === chosen.session_key)) list = [...list, chosen];
     if (!list.length) list = await get(`sessions?year=${year - 1}`);
     list.sort((a, b) => Date.parse(a.date_start) - Date.parse(b.date_start));
     const now = Date.now();
@@ -239,8 +248,9 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
     upcoming = next ? { startsAt: Date.parse(next.date_start), nextLabel: next.session_name, meeting: next.location || next.circuit_short_name, circuit: `${next.circuit_short_name || ''} · ${next.country_name || ''}`.trim() } : null;
     if (upcoming && pickedMeta && next?.session_key === pickedMeta.key) upcoming = { ...upcoming, meeting: pickedMeta.meeting, circuit: `${pickedMeta.circuitName || upcoming.circuit} · ${pickedMeta.country}` };
     const meetingSessions = next ? await get(`sessions?meeting_key=${next.meeting_key}`) : [];
-    upcoming = upcoming && { ...upcoming, schedule: meetingSessions.map((s) => [s.session_name, new Date(s.date_start).toLocaleString('de-CH', { weekday: 'short', hour: '2-digit', minute: '2-digit' })]) };
+    upcoming = upcoming && { ...upcoming, schedule: meetingSessions.map((s) => [s.session_name, Date.parse(s.date_start)]) };
     session = pick;
+    if (pick && Date.parse(pick.date_end) < Date.now() - 3 * 3600000) pastKeys.add(pick.session_key);
     nextSession = next || null;
     if (!session) replay = false;
     if (session) {
@@ -268,11 +278,12 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
     drivers = new Map(ds.map((d) => [d.driver_number, d]));
     // Streckenlayout: Positionsdaten einer Runde eines Fahrers, auf das Layout aus f1-circuits-svg abgebildet
     toTrack = (x, y) => [x, y];
-    layoutNote = '';
+    layoutNote = false;
     let outline = null;
     try {
       const num = ds[0].driver_number;
-      const ls = await get(`laps?session_key=${k}&driver_number=${num}&lap_number=3`);
+      if (replay) laps = await get(`laps?session_key=${k}`); // wird unten für die Wiederholung weiterverwendet
+      const ls = replay ? laps.filter((x) => x.driver_number === num && x.lap_number === 3) : await get(`laps?session_key=${k}&driver_number=${num}&lap_number=3`);
       const l = ls[0];
       if (l?.date_start && l.lap_duration) {
         const a = Date.parse(l.date_start);
@@ -292,7 +303,7 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
       if (outline) {
         const fit = fitSimilarity(outline, pts);
         if (fit.error < 0.08) toTrack = (x, y) => fit.map(x, y);
-        else { track = { points: outline }; layoutNote = ' · Layout passt nicht zu den Positionsdaten, zeige Umrisslinie'; }
+        else { track = { points: outline }; layoutNote = true; }
       } else { track = { points: pts, rotate: layout.rotate }; }
     } else if (outline) track = { points: outline };
     await addCircuitInfo();
@@ -331,7 +342,7 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
 
   /** Wiederholung: alles, was nicht zeitfensterweise geladen wird, einmal komplett holen. */
   async function loadReplayStatic(k) {
-    laps = await get(`laps?session_key=${k}`);
+    if (!laps.length) laps = await get(`laps?session_key=${k}`);
     stints = await get(`stints?session_key=${k}`);
     control = await get(`race_control?session_key=${k}`);
     radioRows = await get(`team_radio?session_key=${k}`);
@@ -384,8 +395,9 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
 
   function build() {
     const now = vnow();
+    const note = noteMsg ? tr('src.unreachable', { msg: noteMsg }) : ''; // Fehlertext in der aktuellen Sprache
     if (!session) {
-      return { now: Date.now(), flag: 'green', session: { type: 'upcoming', startsAt: upcoming?.startsAt, meeting: upcoming?.meeting }, drivers: [], feed: [], track: track || { points: [] }, weather, upcoming: mergeUpcoming(upcoming, extras) || {}, problem: errors ? note : '', sourceNote: note || 'OpenF1: keine laufende Session. Wertungen und Kalender: Jolpica F1.' };
+      return { now: Date.now(), flag: 'green', session: { type: 'upcoming', startsAt: upcoming?.startsAt, meeting: upcoming?.meeting }, drivers: [], feed: [], track: track || { points: [] }, weather, upcoming: mergeUpcoming(upcoming, extras) || {}, problem: errors ? note : '', sourceNote: note || tr('src.note.idle') };
     }
     const type = sessionType(session.session_name);
     const ctl = replay ? control.filter((m) => Date.parse(m.date) <= now) : control;
@@ -450,7 +462,7 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
       safetyCar, sectorFlags: track?.marshal?.length ? sectorFlagsFrom(ctl) : undefined, pitStops, pitLoss: track?.pitLoss || null,
       now: replay ? now : Date.now(), flag, weather: wx, feed, track: track || { points: [] }, drivers: rows, overtake, upcoming: mergeUpcoming(upcoming, extras),
       problem: errors ? note : '',
-      sourceNote: (replay ? `${replayOnly ? 'Demo' : 'OpenF1'}: Wiederholung (${clock.speed}×) mit echten Daten, ${session.session_name}, ${session.location}` : `OpenF1 live: ${session.session_name}, ${session.location}`) + layoutNote + ' · Daten: OpenF1, Jolpica F1 · Streckenlayouts: julesr0y/f1-circuits-svg (CC BY 4.0)',
+      sourceNote: (replay ? tr('src.note.replay', { who: replayOnly ? 'Demo' : 'OpenF1', speed: clock.speed, session: session.session_name, place: session.location }) : tr('src.note.live', { session: session.session_name, place: session.location })) + (layoutNote ? ' · ' + tr('src.note.layout') : '') + ' · ' + tr('src.note.credits'),
       session: { key: session.session_key, type, name: session.session_name, circuit: session.circuit_short_name, lap: leaderLap || null, totalLaps: null, flagSince: since, phase: replay ? 'replay' : 'live', cutoff: type === 'quali' ? 10 : null,
         remaining: type === 'quali' ? Math.max(0, (Date.parse(session.date_end) - now) / 1000) : null },
       startLights: replay && raceStart() ? { startsAt: lightsOut(), now, speed: clock.paused || clock.hold ? 0 : clock.speed, per: Math.min(clock.speed, 4) } : undefined,
@@ -468,10 +480,10 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
         await pollFast();
       }
       if (my !== epoch) return;
-      errors = 0; note = '';
+      errors = 0; noteMsg = '';
     } catch (e) {
       if (my !== epoch) return; // Fehler einer verlassenen Session betrifft die neue nicht
-      errors++; note = `OpenF1 nicht erreichbar (${e.message}). Wiederhole …`;
+      errors++; noteMsg = e.message;
     }
     if (my !== epoch) return; // in der Zwischenzeit wurde eine andere Session gewählt
     onState(build());
@@ -498,10 +510,10 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
       loc = new Map([...smp.location].map(([n, p]) => { const [x, y] = toTrack(p.x, -p.y); return [n, { x, y }]; }));
       buffer.evict(t);
       if (my !== epoch) return;
-      errors = 0; note = '';
+      errors = 0; noteMsg = '';
     } catch (e) {
       if (my !== epoch) return; // Fehler einer verlassenen Session betrifft die neue nicht
-      errors++; note = `OpenF1 nicht erreichbar (${e.message}). Wiederhole …`;
+      errors++; noteMsg = e.message;
       if (clock.hold) rebase({ hold: false });
       loadingNow = false;
     }
@@ -525,7 +537,7 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
       if (my !== epoch) return;
     } catch (e) {
       if (my !== epoch) return;
-      note = `OpenF1 nicht erreichbar (${e.message}). Wiederhole …`; errors = 1;
+      noteMsg = e.message; errors = 1;
       if (!stopped) { onState(build()); timer = setTimeout(init, 5000); }
       return;
     }

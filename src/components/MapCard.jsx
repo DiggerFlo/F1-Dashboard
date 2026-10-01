@@ -4,10 +4,11 @@ import { BorderOutlined, ColumnWidthOutlined, FullscreenExitOutlined, Fullscreen
 import { trackSvg } from '../../js/track.js';
 import { LIGHTS, lightsFor, isRaceLabel } from '../../js/startlights.js';
 import { Html, Swatch } from './bits.jsx';
+import { t, dec } from '../../js/i18n.js';
 
-const MODES = [
-  { value: 'normal', title: 'Standard', label: <span aria-label="Standard" title="Standard"><BorderOutlined /></span> },
-  { value: 'wide', title: 'Kino: volle Breite', label: <span aria-label="Kino" title="Kino: volle Breite"><ColumnWidthOutlined /></span> },
+const modes = () => [
+  { value: 'normal', title: t('map.standard'), label: <span aria-label={t('map.standard')} title={t('map.standard')}><BorderOutlined /></span> },
+  { value: 'wide', title: t('map.cinemaTip'), label: <span aria-label={t('map.cinema')} title={t('map.cinemaTip')}><ColumnWidthOutlined /></span> },
 ];
 
 const DISPLAY_LAG_MS = 600;
@@ -24,9 +25,9 @@ export function StartLights({ startsAt, now, speed = 1, per = 1 }) {
   const l = lightsFor((startsAt - virt) / 1000 / per);
   if (!l.visible) return null;
   return (
-    <div className={`slights${l.go ? ' go' : ''}`} role="img" aria-label={l.go ? 'Start: alle Lichter aus' : `Startampel: ${l.lit} von ${LIGHTS} Lichtern`}>
+    <div className={`slights${l.go ? ' go' : ''}`} role="img" aria-label={l.go ? t('map.lightsOut') : t('map.lights', { lit: l.lit, total: LIGHTS })}>
       {Array.from({ length: LIGHTS }, (_, i) => <span key={i} className={i < l.lit ? 'on' : ''}><i /><i /></span>)}
-      {l.go && <b>Lights out</b>}
+      {l.go && <b>{t('map.lightsOutText')}</b>}
     </div>
   );
 }
@@ -39,9 +40,9 @@ export function StartLights({ startsAt, now, speed = 1, per = 1 }) {
 function PitBox({ drivers, now }) {
   const list = drivers.filter((d) => d.pit && d.pitSince != null);
   return (
-    <div className={`pitbox${list.length ? ' on' : ''}`} role="status" aria-label="Boxengasse">
-      <span className="label">Boxengasse</span>
-      {list.length ? list.map((d) => <span key={d.num} className="pbchip"><Swatch color={d.color} team={d.team} /><span className="code">{d.code}</span><span className="mono">{Math.max(0, (now - d.pitSince) / 1000).toFixed(1).replace('.', ',')} s</span></span>) : <span className="muted">frei</span>}
+    <div className={`pitbox${list.length ? ' on' : ''}`} role="status" aria-label={t('map.pitlane')}>
+      <span className="label">{t('map.pitlane')}</span>
+      {list.length ? list.map((d) => <span key={d.num} className="pbchip"><Swatch color={d.color} team={d.team} /><span className="code">{d.code}</span><span className="mono">{dec(Math.max(0, (now - d.pitSince) / 1000).toFixed(1))} s</span></span>) : <span className="muted">{t('map.pitlaneFree')}</span>}
     </div>
   );
 }
@@ -78,8 +79,8 @@ export function MapCard({ html, label, circuit, mode = 'normal', onMode, overlay
         </div>
         {lights}
         <div className="mapctl">
-          {onMode && <Segmented className="msize" size="small" value={mode} options={MODES} onChange={onMode} aria-label="Größe der Karte" />}
-          <Button className="mfull" type="text" size="small" icon={full ? <FullscreenExitOutlined /> : <FullscreenOutlined />} onClick={toggleFull} aria-label={full ? 'Vollbild beenden' : 'Vollbild'} title={full ? 'Vollbild beenden (Esc)' : 'Vollbild'} />
+          {onMode && <Segmented className="msize" size="small" value={mode} options={modes()} onChange={onMode} aria-label={t('map.size')} />}
+          <Button className="mfull" type="text" size="small" icon={full ? <FullscreenExitOutlined /> : <FullscreenOutlined />} onClick={toggleFull} aria-label={full ? t('map.fullscreenExit') : t('map.fullscreen')} title={full ? t('map.fullscreenExitEsc') : t('map.fullscreen')} />
         </div>
       </div>
       <Html html={html} />
@@ -91,9 +92,9 @@ export function MapCard({ html, label, circuit, mode = 'normal', onMode, overlay
 /** Karte für den aktuellen Zustand (Vorschau: nur Layout, sonst mit Fahrern und Auswahl). */
 export function StateMap({ state, ui, actions = {}, overlay }) {
   const up = state.session.type === 'upcoming';
-  const t = state.session.type;
-  const label = up ? 'Streckenlayout' : t === 'quali' ? 'Qualifying' : t === 'practice' ? 'Training' : 'Rennen';
-  const lap = !up && t === 'race' && state.session.lap ? `Runde ${state.session.lap}${state.session.totalLaps ? ` / ${state.session.totalLaps}` : ''}` : null;
+  const type = state.session.type;
+  const label = up ? t('map.layout') : type === 'quali' ? t('tab.quali') : type === 'practice' ? t('tab.practice') : t('tab.race');
+  const lap = !up && type === 'race' && state.session.lap ? (state.session.totalLaps ? t('map.lapOf', { lap: state.session.lap, total: state.session.totalLaps }) : t('kpi.lapN', { lap: state.session.lap })) : null;
   const circuit = up ? state.upcoming?.circuit || '' : state.session.circuit || '';
   const u = state.upcoming;
   const sl = state.startLights; // Demo-Rennen: Ampel mit Wanduhr-Zeiten

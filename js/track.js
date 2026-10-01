@@ -1,4 +1,5 @@
 import { esc, safeColor } from './format.js';
+import { t } from './i18n.js';
 import { arcPoints } from './pit.js';
 
 /** Punkt auf einem geschlossenen Polygonzug bei Anteil f (0..1) der Gesamtlänge. */
@@ -203,7 +204,7 @@ function bbox(points) {
  */
 export function trackSvg(state, selNum, pos = null) {
   const tr = state.track;
-  if (!tr || !tr.points?.length) return '<div class="empty">Streckenlayout wird geladen …</div>';
+  if (!tr || !tr.points?.length) return `<div class="empty">${esc(t('map.loading'))}</div>`;
   const rot = rotator(tr.points, tr.rotate);
   const pts = tr.points.map(rot);
   const b = bbox(pts);
@@ -214,7 +215,7 @@ export function trackSvg(state, selNum, pos = null) {
   const poly = pts.map((p) => p.map((v) => v.toFixed(1)).join(',')).join(' ');
   const flag = state.flag;
   const sectorMode = !!(tr.marshal?.length && state.sectorFlags);
-  const out = [`<svg viewBox="${vx} ${vy} ${vw} ${vh}" data-rot="${rot.params}" data-unit="${unit}" role="img" aria-label="Streckenlayout mit Fahrerpositionen">`];
+  const out = [`<svg viewBox="${vx} ${vy} ${vw} ${vh}" data-rot="${rot.params}" data-unit="${unit}" role="img" aria-label="${esc(t('map.svgLabel'))}">`];
   const w = unit * 3;
   out.push(`<polygon points="${poly}" fill="none" stroke="#2e2e37" stroke-width="${w}" stroke-linejoin="round"/>`);
   out.push(`<polygon points="${poly}" fill="none" stroke="#17171c" stroke-width="${w * 0.75}" stroke-linejoin="round"/>`);
@@ -247,7 +248,7 @@ export function trackSvg(state, selNum, pos = null) {
   }
   const labelled = new Set(state.drivers.slice(0, flag === 'sc' || flag === 'vsc' || flag === 'red' ? 1 : 3).map((d) => d.num));
   for (const d of state.drivers) if (d.status) labelled.add(d.num);
-  const tagOf = (d) => (d.status === 'out' ? ' DNF' : d.status === 'stopped' ? ' STOPP' : '');
+  const tagOf = (d) => (d.status === 'out' ? ` ${t('badge.dnf')}` : d.status === 'stopped' ? ` ${t('map.stopTag')}` : '');
   const cars = state.drivers.filter((d) => d.x != null && d.onTrack !== false && !d.pit && d.status !== 'out'); // Ausgefallene werden ausgeblendet // in der Box: nicht zeigen
   const order = [...cars].sort((a, c) => (a.num === selNum) - (c.num === selNum));
   for (const car of order) {
@@ -281,11 +282,11 @@ export function tracesSvg(hist, ref, color = '#f5f5f3') {
   const h = hist.slice(-N), off = N - h.length; // neue Daten füllen von rechts
   const sy = (v) => 168 - (Math.min(350, Math.max(0, v)) / 350) * 150;
   const speed = (arr, o = 0) => arr.map((r, i) => `${X(i + o).toFixed(1)},${sy(r.speed).toFixed(1)}`).join(' ');
-  let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Verlauf von Geschwindigkeit, Gas und Bremse">`;
+  let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(t('tele.chartAria'))}">`;
   for (const v of [0, 100, 200, 300]) s += `<line x1="${L}" x2="${W - R}" y1="${sy(v)}" y2="${sy(v)}" stroke="#2e2e37"/><text x="${L - 8}" y="${sy(v) + 3}" text-anchor="end" font-family="JetBrains Mono" font-size="12" fill="#9a9aa6">${v}</text>`;
-  s += `<text x="${L - 8}" y="10" text-anchor="end" font-family="Inter" font-size="11" fill="#9a9aa6">km/h</text>`;
-  s += `<text x="${L - 8}" y="206" text-anchor="end" font-family="Inter" font-size="12" fill="#9a9aa6">Gas</text><rect x="${L}" y="186" width="${W - L - R}" height="30" fill="#0b0b0e" stroke="#2e2e37"/>`;
-  s += `<text x="${L - 8}" y="262" text-anchor="end" font-family="Inter" font-size="12" fill="#9a9aa6">Bremse</text><rect x="${L}" y="242" width="${W - L - R}" height="30" fill="#0b0b0e" stroke="#2e2e37"/>`;
+  s += `<text x="${L - 8}" y="10" text-anchor="end" font-family="Inter" font-size="11" fill="#9a9aa6">${esc(t('unit.kmh'))}</text>`;
+  s += `<text x="${L - 8}" y="206" text-anchor="end" font-family="Inter" font-size="12" fill="#9a9aa6">${esc(t('tele.throttle'))}</text><rect x="${L}" y="186" width="${W - L - R}" height="30" fill="#0b0b0e" stroke="#2e2e37"/>`;
+  s += `<text x="${L - 8}" y="262" text-anchor="end" font-family="Inter" font-size="12" fill="#9a9aa6">${esc(t('tele.brake'))}</text><rect x="${L}" y="242" width="${W - L - R}" height="30" fill="#0b0b0e" stroke="#2e2e37"/>`;
   if (ref && ref.length > 1) { const r = ref.slice(-N); s += `<polyline points="${speed(r, N - r.length)}" fill="none" stroke="#b14bff" stroke-width="2" stroke-linejoin="round"/>`; }
   if (h.length > 1) {
     s += `<polygon points="${X(off).toFixed(1)},${sy(0)} ${speed(h, off)} ${X(N - 1).toFixed(1)},${sy(0)}" fill="${c}" fill-opacity=".16"/>`;
@@ -297,9 +298,9 @@ export function tracesSvg(hist, ref, color = '#f5f5f3') {
     s += `<circle cx="${X(N - 1)}" cy="${sy(last.speed)}" r="4.5" fill="${c}" stroke="#17171c" stroke-width="2"/>`;
     s += `<text x="${X(N - 1) - 8}" y="${Math.max(12, sy(last.speed) - 8)}" text-anchor="end" font-family="JetBrains Mono" font-size="13" font-weight="700" fill="#f5f5f3">${Math.round(last.speed)}</text>`;
   } else {
-    s += `<text x="${(W + L) / 2}" y="100" text-anchor="middle" font-family="Inter" font-size="13" fill="#9a9aa6">Messwerte werden gesammelt …</text>`;
+    s += `<text x="${(W + L) / 2}" y="100" text-anchor="middle" font-family="Inter" font-size="13" fill="#9a9aa6">${esc(t('tele.collecting'))}</text>`;
   }
-  s += `<text x="${L}" y="${H - 2}" font-family="Inter" font-size="11" fill="#9a9aa6">älter</text><text x="${W - R}" y="${H - 2}" text-anchor="end" font-family="Inter" font-size="11" fill="#9a9aa6">jetzt</text></svg>`;
+  s += `<text x="${L}" y="${H - 2}" font-family="Inter" font-size="11" fill="#9a9aa6">${esc(t('tele.older'))}</text><text x="${W - R}" y="${H - 2}" text-anchor="end" font-family="Inter" font-size="11" fill="#9a9aa6">${esc(t('tele.now'))}</text></svg>`;
   return s;
 }
 

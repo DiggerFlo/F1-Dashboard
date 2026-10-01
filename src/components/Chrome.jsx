@@ -1,9 +1,14 @@
 import { useState } from 'react';
-import { Alert, Button, Menu, Segmented, Select, Slider, Spin } from 'antd';
-import { CaretRightFilled, PauseOutlined, StepBackwardOutlined } from '@ant-design/icons';
+import { Alert, Button, Dropdown, Menu, Segmented, Select, Slider, Spin } from 'antd';
+import { CaretRightFilled, GlobalOutlined, PauseOutlined, StepBackwardOutlined } from '@ant-design/icons';
 import { fmtClock } from '../../js/format.js';
+import { LANGS, setLang, t } from '../../js/i18n.js';
+import { sessionLabel } from '../../js/sessions.js';
+import { flagUrl } from '../flags.js';
+import { useLang } from '../useLang.js';
 
-const TABS = [['upcoming', 'Vorschau'], ['race', 'Rennen'], ['quali', 'Qualifying'], ['practice', 'Training'], ['calendar', 'Kalender']];
+const TABS = ['upcoming', 'race', 'quali', 'practice', 'calendar'];
+const LANG_FLAG = { de: 'Germany', en: 'United Kingdom' };
 
 const Mark = () => (
   <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3h9a6 6 0 0 1 0 12H9v6H4V3Zm5 4v4h4a2 2 0 0 0 0-4H9Z" fill="currentColor" fillRule="evenodd" /><rect x="15" y="17" width="5" height="4" fill="#e8112d" /></svg>
@@ -11,15 +16,29 @@ const Mark = () => (
 
 function statusOf(state) {
   const f = state.flag;
-  let dot = '', txt = 'Live';
-  if (state.session.type === 'upcoming') txt = 'Nächste Session';
-  else if (state.session.phase === 'replay') txt = 'Wiederholung';
-  else if (f === 'red') { dot = 'y'; txt = 'Unterbrochen'; }
-  else if (f === 'sc' || f === 'vsc' || f === 'yellow') { dot = 'y'; txt = 'Live · Neutralisiert'; }
-  else if (f === 'chequered') txt = 'Beendet';
+  let dot = '', txt = t('status.live');
+  if (state.session.type === 'upcoming') txt = t('status.next');
+  else if (state.session.phase === 'replay') txt = t('status.replay');
+  else if (f === 'red') { dot = 'y'; txt = t('status.suspended'); }
+  else if (f === 'sc' || f === 'vsc' || f === 'yellow') { dot = 'y'; txt = t('status.neutral'); }
+  else if (f === 'chequered') txt = t('status.finished');
   else dot = state.session.type === 'race' ? 'red' : 'g';
-  const lap = state.session.type === 'race' && state.session.lap ? ` · Runde ${state.session.lap}${state.session.totalLaps ? '/' + state.session.totalLaps : ''}` : '';
+  const lap = state.session.type === 'race' && state.session.lap ? t('status.lap', { lap: `${state.session.lap}${state.session.totalLaps ? '/' + state.session.totalLaps : ''}` }) : '';
   return { dot, txt: txt + lap };
+}
+
+/** Sprachmenü: Flagge und Kürzel, Auswahl speichert die Sprache im Browser. */
+function LangMenu() {
+  const lang = useLang();
+  const flag = (l) => { const u = flagUrl(LANG_FLAG[l]); return u ? <img className="lflag" src={u} alt="" /> : null; };
+  const items = LANGS.map((l) => ({ key: l, label: <span className="langitem">{flag(l)}<span>{t(`lang.${l}`)}</span></span> }));
+  return (
+    <Dropdown trigger={['click']} placement="bottomRight" menu={{ items, selectable: true, selectedKeys: [lang], onClick: ({ key }) => setLang(key) }}>
+      <Button className="langbtn" size="small" aria-label={`${t('lang.label')}: ${t(`lang.${lang}`)}`} title={t('lang.label')}>
+        <GlobalOutlined />{flag(lang)}<span className="lcode">{lang.toUpperCase()}</span>
+      </Button>
+    </Dropdown>
+  );
 }
 
 function Topbar({ state, ui, actions }) {
@@ -27,10 +46,11 @@ function Topbar({ state, ui, actions }) {
   const { dot, txt } = statusOf(state);
   return (
     <header className="top">
-      <a className="brand" href="./" aria-label="Pitwall, Startseite"><Mark /><span>Pitwall</span></a>
-      <Menu mode="horizontal" selectedKeys={[type]} items={TABS.map(([key, label]) => ({ key, label }))} onClick={({ key }) => actions.tab?.(key)} className="tabs" aria-label="Ansicht" />
+      <a className="brand" href="./" aria-label={t('app.home')}><Mark /><span>Pitwall</span></a>
+      <Menu mode="horizontal" selectedKeys={[type]} items={TABS.map((key) => ({ key, label: t(`tab.${key}`) }))} onClick={({ key }) => actions.tab?.(key)} className="tabs" aria-label={t('nav.view')} />
       <div className="top-r">
-        <Segmented size="small" className="srcsw" value={ui.demo ? 'demo' : 'openf1'} options={[{ value: 'demo', label: 'Demo' }, { value: 'openf1', label: 'Echtdaten' }]} onChange={(v) => actions.source?.(v)} aria-label="Datenquelle" />
+        <Segmented size="small" className="srcsw" value={ui.demo ? 'demo' : 'openf1'} options={[{ value: 'demo', label: t('src.demo') }, { value: 'openf1', label: t('src.live') }]} onChange={(v) => actions.source?.(v)} aria-label={t('src.label')} />
+        <LangMenu />
         <div className="status"><span className={`dot ${dot}`} />{txt}</div>
       </div>
     </header>
@@ -59,15 +79,15 @@ function Banner({ state }) {
   const up = s.type === 'upcoming';
   let st; // { cls, icon, title, sub, since }
   switch (state.flag) {
-    case 'sc': st = { cls: 'yl', icon: <CarBadge t="SC" />, title: 'Safety Car', sub: 'Überholen verboten · Delta-Zeit beachten', since }; break;
-    case 'vsc': st = { cls: 'yl', icon: <CarBadge t="VSC" />, title: 'Virtual Safety Car', sub: 'Delta-Zeit einhalten · Überholen verboten', since }; break;
-    case 'yellow': st = { cls: 'yl', icon: <FlagIcon />, title: 'Gelbe Flagge', sub: 'Gefahr auf der Strecke', since }; break;
-    case 'red': st = { cls: 'rd', icon: <FlagIcon />, title: 'Rote Flagge', sub: 'Session unterbrochen', since }; break;
-    case 'chequered': st = { cls: 'ch', icon: <ChequeredIcon />, title: 'Zielflagge', sub: 'Session beendet' }; break;
+    case 'sc': st = { cls: 'yl', icon: <CarBadge t="SC" />, title: t('banner.sc.title'), sub: t('banner.sc.sub'), since }; break;
+    case 'vsc': st = { cls: 'yl', icon: <CarBadge t="VSC" />, title: t('banner.vsc.title'), sub: t('banner.vsc.sub'), since }; break;
+    case 'yellow': st = { cls: 'yl', icon: <FlagIcon />, title: t('banner.yellow.title'), sub: t('banner.yellow.sub'), since }; break;
+    case 'red': st = { cls: 'rd', icon: <FlagIcon />, title: t('banner.red.title'), sub: t('banner.red.sub'), since }; break;
+    case 'chequered': st = { cls: 'ch', icon: <ChequeredIcon />, title: t('banner.chequered.title'), sub: t('banner.chequered.sub') }; break;
     default:
-      if (up) st = { cls: '', icon: <span className="dot" />, title: 'Nächste Session', sub: '' };
-      else if (w?.rain) st = { cls: 'rn', icon: <RainIcon />, title: 'Regen', sub: timed ? `Verbleibend ${fmtClock(s.remaining)}` : 'Nasse Strecke · Reifenwahl beachten' };
-      else st = { cls: 'go', icon: <FlagIcon />, title: 'Grüne Flagge', sub: timed ? `Verbleibend ${fmtClock(s.remaining)}` : 'Strecke frei' };
+      if (up) st = { cls: '', icon: <span className="dot" />, title: t('status.next'), sub: '' };
+      else if (w?.rain) st = { cls: 'rn', icon: <RainIcon />, title: t('banner.rain.title'), sub: timed ? t('banner.remaining', { time: fmtClock(s.remaining) }) : t('banner.rain.sub') };
+      else st = { cls: 'go', icon: <FlagIcon />, title: t('banner.green.title'), sub: timed ? t('banner.remaining', { time: fmtClock(s.remaining) }) : t('banner.green.sub') };
   }
   const chip = (k, v, cls = '') => <span className={`bchip${cls}`} key={k}><span className="label">{k}</span><span className="mono">{v}</span></span>;
   return (
@@ -76,11 +96,11 @@ function Banner({ state }) {
       <h2 className="disp">{st.title}</h2>
       {st.sub && <span className="sub">{st.sub}</span>}
       <span className="sp" />
-      {st.since && chip('Seit', st.since)}
-      {lapTxt && chip('Runde', lapTxt)}
-      {w && chip('Luft', `${w.air} °C`)}
-      {w && chip('Strecke', `${w.track} °C`)}
-      {w && chip(w.rain ? 'Regen' : 'Trocken', w.rain ? 'nass' : 'trocken', w.rain ? ' wet' : '')}
+      {st.since && chip(t('chip.since'), st.since)}
+      {lapTxt && chip(t('chip.lap'), lapTxt)}
+      {w && chip(t('chip.air'), `${w.air} °C`)}
+      {w && chip(t('chip.track'), `${w.track} °C`)}
+      {w && chip(w.rain ? t('chip.rain') : t('chip.dry'), w.rain ? t('chip.wet') : t('chip.dryValue'), w.rain ? ' wet' : '')}
     </div>
   );
 }
@@ -88,10 +108,10 @@ function Banner({ state }) {
 function DemoToolbar({ actions }) {
   const b = (ev, t) => <Button key={ev} size="small" onClick={() => actions.trigger?.(ev)}>{t}</Button>;
   return (
-    <div className="demo" role="toolbar" aria-label="Demo-Steuerung">
-      <span className="label">Demo-Ereignis</span>
-      {b('green', 'Grün')}{b('yellow', 'Gelb')}{b('sc', 'Safety Car')}{b('vsc', 'VSC')}{b('red', 'Rote Flagge')}{b('rain', 'Regen')}
-      <span className="label" style={{ marginLeft: 'auto' }}>Simulierte Daten</span>
+    <div className="demo" role="toolbar" aria-label={t('demo.toolbar')}>
+      <span className="label">{t('demo.event')}</span>
+      {b('green', t('demo.green'))}{b('yellow', t('demo.yellow'))}{b('sc', t('demo.sc'))}{b('vsc', t('demo.vsc'))}{b('red', t('demo.red'))}{b('rain', t('demo.rain'))}
+      <span className="label" style={{ marginLeft: 'auto' }}>{t('demo.simulated')}</span>
     </div>
   );
 }
@@ -115,28 +135,28 @@ function ReplayBar({ replay, session, seasons, actions }) {
   const shown = drag ?? frac * 1000;
   const speeds = SPEEDS.includes(replay.speed) ? SPEEDS : [...SPEEDS, replay.speed].sort((a, b) => a - b);
   const at = (v) => fmtClock(((v / 1000) * span) / 1000);
-  const current = [session.name, session.circuit].filter(Boolean).join(' · ') || 'Session wählen';
+  const current = [session.name ? sessionLabel(session.name) : null, session.circuit].filter(Boolean).join(' · ') || t('rb.pick');
   return (
-    <div className="demo replaybar" role="toolbar" aria-label="Steuerung der Wiederholung">
+    <div className="demo replaybar" role="toolbar" aria-label={t('rb.toolbar')}>
       <div className="rb-ctl">
-        <Button className="rb-play" type="primary" shape="circle" icon={replay.paused ? <CaretRightFilled /> : <PauseOutlined />} onClick={() => actions.replay?.pause(!replay.paused)} aria-label={replay.paused ? 'Fortsetzen' : 'Pausieren'} />
-        <Button className="rb-sq" icon={<StepBackwardOutlined />} onClick={() => actions.replay?.seek(0)} aria-label="Zum Start" title="Zum Start der Session" />
-        <Segmented className="rb-speed" size="small" value={replay.speed} options={speeds.map((v) => ({ value: v, label: `${v}×` }))} onChange={(v) => actions.replay?.speed(v)} aria-label="Tempo" />
+        <Button className="rb-play" type="primary" shape="circle" icon={replay.paused ? <CaretRightFilled /> : <PauseOutlined />} onClick={() => actions.replay?.pause(!replay.paused)} aria-label={replay.paused ? t('rb.resume') : t('rb.pause')} />
+        <Button className="rb-sq" icon={<StepBackwardOutlined />} onClick={() => actions.replay?.seek(0)} aria-label={t('rb.toStart')} title={t('rb.toStartTitle')} />
+        <Segmented className="rb-speed" size="small" value={replay.speed} options={speeds.map((v) => ({ value: v, label: `${v}×` }))} onChange={(v) => actions.replay?.speed(v)} aria-label={t('rb.speed')} />
       </div>
       <div className="rb-sess">
-        <span className="label">Session</span>
+        <span className="label">{t('rb.session')}</span>
         <Select
           size="small" className="raceselect" showSearch optionFilterProp="label" value={session.key} labelRender={() => current}
           options={raceOptions(seasons)} onOpenChange={(o) => o && actions.loadSeasons?.()} onChange={(_, o) => actions.openRace?.(o.race)}
-          notFoundContent="Keine Rennen geladen" aria-label="Rennen wählen" popupMatchSelectWidth={false}
+          notFoundContent={t('rb.noRaces')} aria-label={t('rb.raceAria')} popupMatchSelectWidth={false}
         />
       </div>
       <div className="rb-time">
         <span className="mono rb-now">{at(shown)}</span>
-        <Slider className="replayslider" min={0} max={1000} value={shown} tooltip={{ formatter: (v) => at(v) }} onChange={setDrag} onChangeComplete={(v) => { setDrag(null); actions.replay?.seek(v / 1000); }} aria-label="Position in der Session" />
+        <Slider className="replayslider" min={0} max={1000} value={shown} tooltip={{ formatter: (v) => at(v) }} onChange={setDrag} onChangeComplete={(v) => { setDrag(null); actions.replay?.seek(v / 1000); }} aria-label={t('rb.position')} />
         <span className="mono rb-tot">{at(1000)}</span>
       </div>
-      {replay.loading ? <span className="rb-load" role="status"><Spin size="small" /> Lädt Daten</span> : <span className="rb-src label">Echte Daten · OpenF1</span>}
+      {replay.loading ? <span className="rb-load" role="status"><Spin size="small" /> {t('rb.loading')}</span> : <span className="rb-src label">{t('rb.src')}</span>}
     </div>
   );
 }
@@ -145,7 +165,7 @@ function ReplayBar({ replay, session, seasons, actions }) {
 export function Chrome({ state, ui, actions = {} }) {
   return (
     <>
-      <h1 className="sr-only">Pitwall – F1 Live-Dashboard</h1>
+      <h1 className="sr-only">{t('app.title')}</h1>
       <Topbar state={state} ui={ui} actions={actions} />
       {ui.view === 'calendar' ? null : state.replay ? <ReplayBar replay={state.replay} session={state.session} seasons={ui.seasons} actions={actions} /> : ui.sim && <DemoToolbar actions={actions} />}
       {state.problem && <Alert className="problem" type="warning" showIcon banner role="alert" message={state.problem} />}

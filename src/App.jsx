@@ -2,6 +2,9 @@ import { useEffect, useRef } from 'react';
 import { Layout, Skeleton } from 'antd';
 import { applyCarPositions } from '../js/track.js';
 import { useDashboard } from './useDashboard.js';
+import { useLang } from './useLang.js';
+import { t } from '../js/i18n.js';
+import { sessionLabel } from '../js/sessions.js';
 import { Chrome } from './components/Chrome.jsx';
 import { Main } from './components/Main.jsx';
 import { Calendar } from './components/Calendar.jsx';
@@ -15,7 +18,7 @@ import { Top5 } from './components/Main.jsx';
 function askKey() {
   try {
     let k = sessionStorage.getItem('openai_key');
-    if (!k) { k = window.prompt('OpenAI-API-Key für Whisper (bleibt nur in diesem Tab, wird nur an api.openai.com gesendet):'); if (k) sessionStorage.setItem('openai_key', k.trim()); }
+    if (!k) { k = window.prompt(t('app.openaiKey')); if (k) sessionStorage.setItem('openai_key', k.trim()); }
     return k && k.trim();
   } catch { return null; }
 }
@@ -25,6 +28,7 @@ function Loading() {
 }
 
 export function App() {
+  const lang = useLang(); // rendert die ganze Oberfläche neu, wenn die Sprache wechselt
   const { state, ui, actions, hist, animator, params } = useDashboard();
   const root = useRef(null);
 
@@ -40,7 +44,8 @@ export function App() {
     return () => cancelAnimationFrame(id);
   }, [animator]);
 
-  useEffect(() => { document.title = `Pitwall · ${state?.session.name || 'Vorschau'}`; }, [state?.session.name]);
+  useEffect(() => { document.querySelector('meta[name=description]')?.setAttribute('content', t('app.description')); }, [lang]);
+  useEffect(() => { document.title = `Pitwall · ${state?.session.name ? sessionLabel(state.session.name) : t('tab.upcoming')}`; }, [state?.session.name, lang]);
 
   if (!state) return <div className="app"><Loading /></div>;
 
@@ -48,12 +53,12 @@ export function App() {
   const refHist = top && top.num !== ui.sel ? hist.get(top.num) : null;
   // Funk gibt es nur während einer Session, nicht in Vorschau und Kalender
   const hasFeed = state.session.type !== 'upcoming' && ui.view !== 'calendar';
-  const sub = state.session.type === 'upcoming' ? 'Offline' : state.flag === 'sc' ? 'Safety Car' : state.flag === 'red' ? 'Unterbrochen' : 'Live';
+  const sub = state.session.type === 'upcoming' ? t('side.offline') : state.flag === 'sc' ? t('banner.sc.title') : state.flag === 'red' ? t('status.suspended') : t('status.live');
 
   return (
     <Layout className="app" ref={root}>
       {ui.loading && <LoadingOverlay label={ui.loading.label} />}
-      <a className="skip" href="#mainc">Zum Inhalt springen</a>
+      <a className="skip" href="#mainc">{t('app.skip')}</a>
       <Chrome state={state} ui={ui} actions={actions} />
       {ui.cinema && (
         <div className="cinema">
@@ -67,11 +72,11 @@ export function App() {
         {hasFeed && <Feed items={[...state.feed, ...ui.events].sort((a, b) => b.t - a.t)} show={ui.show} onShow={actions.showKind} drivers={state.drivers} filter={ui.filter} onFilter={actions.filter} collapsed={!ui.feedOpen} onToggle={actions.toggleFeed} sub={sub} note={state.sourceNote || ''} proxy={params.get('proxy') ?? 'local'} getKey={askKey} />}
       </div>
       <footer className="foot">
-        <span>Inoffizielles Fan-Projekt, nicht mit der Formula 1 oder einem Team verbunden.</span>
-        <span>Daten: <a href="https://openf1.org" target="_blank" rel="noopener noreferrer">OpenF1</a></span>
-        <span>Streckenlayouts: <a href="https://github.com/julesr0y/f1-circuits-svg" target="_blank" rel="noopener noreferrer">julesr0y/f1-circuits-svg</a> (CC BY 4.0)</span>
-        <span>Strecken, Sektoren, Boxenverlust: <a href="https://multiviewer.app" target="_blank" rel="noopener noreferrer">MultiViewer</a></span>
-        <span>UI: <a href="https://ant.design" target="_blank" rel="noopener noreferrer">Ant Design</a></span>
+        <span>{t('foot.unofficial')}</span>
+        <span>{t('foot.data')} <a href="https://openf1.org" target="_blank" rel="noopener noreferrer">OpenF1</a></span>
+        <span>{t('foot.layouts')} <a href="https://github.com/julesr0y/f1-circuits-svg" target="_blank" rel="noopener noreferrer">julesr0y/f1-circuits-svg</a> (CC BY 4.0)</span>
+        <span>{t('foot.mv')} <a href="https://multiviewer.app" target="_blank" rel="noopener noreferrer">MultiViewer</a></span>
+        <span>{t('foot.ui')} <a href="https://ant.design" target="_blank" rel="noopener noreferrer">Ant Design</a></span>
       </footer>
     </Layout>
   );

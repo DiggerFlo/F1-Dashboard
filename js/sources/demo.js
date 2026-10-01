@@ -8,6 +8,7 @@ import { samplePath } from '../svgpath.js';
 import { DEMO_TRACK } from './demo-track.js';
 import { buildDemoCalendar } from '../calendar.js';
 import { fmtLap } from '../format.js';
+import { t as tr } from '../i18n.js';
 
 const MONZA = { name: DEMO_TRACK.name, points: DEMO_TRACK.points, rotate: DEMO_TRACK.rotate };
 const SECTORS = [0, 0.34, 0.68]; // Sektorgrenzen der Simulation (Anteil der Runde)
@@ -21,16 +22,8 @@ const BASE_LAP = 92.4;
 const TOTAL_LAPS = 57;
 const GAP_SC = 0.012; // Zielabstand hinter dem Vordermann in Runden
 
-const RADIO = [
-  ['TEAM', 'Reifen halten gut, aber hinten wird es langsam heiß.'],
-  ['TEAM', 'Gap nach vorne 1.8, halte den Abstand.'],
-  ['BOX', 'Wir stoppen diese Runde. Reifen Medium.'],
-  ['TEAM', 'Ich bin schneller als der Vordermann, lasst mich DRS nutzen.'],
-  ['TECH', 'Frontflügel scheint beschädigt, kannst du das bestätigen?'],
-  ['TEAM', 'Verstanden, ich schone die Bremsen.'],
-  ['TEAM', 'Balance ist gut, Untersteuern in den langsamen Kurven.'],
-  ['BOX-INFO', 'Hinter dir ist ein Gelber Reifen im Windschatten.'],
-];
+const RADIO_TAGS = ['TEAM', 'TEAM', 'BOX', 'TEAM', 'TECH', 'TEAM', 'TEAM', 'BOX-INFO'];
+const radioLines = () => RADIO_TAGS.map((tag, i) => [tag, tr(`demo.radio.${i + 1}`)]); // Texte nach der aktuellen Sprache
 
 function mulberry32(a) {
   return () => {
@@ -53,7 +46,7 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
   const rnd = mulberry32(seed);
   const baseNow = now;
   let circuit = MONZA, meetingLabel = null;
-  const meetingName = () => `${meetingLabel || 'Großer Preis von Italien'} (Demo)`;
+  const meetingName = () => `${meetingLabel || tr('demo.italianGp')} (Demo)`;
   let clips = new Map(); // code -> echte Funksprüche aus public/data/radio.json
   const clipPos = new Map();
   let gridLeft = null; // Startampel: Sekunden bis zum Start (negativ = Lichter aus, noch kurz sichtbar)
@@ -118,20 +111,20 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
   function trigger(ev) {
     if (kind !== 'race') return;
     const prev = flag;
-    if (ev === 'rain') { weather.rain = !weather.rain; say('yellow', 'WETTER', weather.rain ? 'Regen auf der Strecke. Reifenwahl beachten.' : 'Regen hat aufgehört, Strecke trocknet ab.'); return; }
+    if (ev === 'rain') { weather.rain = !weather.rain; say('yellow', 'WEATHER', weather.rain ? tr('demo.rainOn') : tr('demo.rainOff')); return; }
     if (ev === 'green') {
       if (prev === 'green') return;
       flag = 'green'; flagSince = null;
-      say('', 'FLAGGE', prev === 'red' ? 'Restart. Strecke frei, Grüne Flagge.' : 'Strecke frei, Grüne Flagge.');
-      radio('NOR', 'TEAM', 'Grün, Grün. Wir greifen an.');
+      say('', 'FLAG', prev === 'red' ? tr('demo.restart') : tr('demo.greenOn'));
+      radio('NOR', 'TEAM', tr('demo.r.green'));
       return;
     }
     if (ev === prev) return;
     flag = ev; flagSince = nowMs();
-    if (ev === 'sc') { say('yellow', 'SC', 'SAFETY CAR EINGESETZT. Fahrzeug 16 (BEA) in Kurve 7 gestoppt.'); radio('LEC', 'BOX', 'Ich will reinkommen, günstiger Stopp. Bestätigen?'); radio('HAM', 'TEAM', 'Wir bleiben draußen. Halte Delta.'); }
-    if (ev === 'vsc') { say('yellow', 'VSC', 'VIRTUAL SAFETY CAR EINGESETZT.'); }
-    if (ev === 'yellow') { say('yellow', 'GELB', 'Gelbe Flagge Sektor 2.'); }
-    if (ev === 'red') { say('red', 'ROT', 'ROTE FLAGGE. Session unterbrochen. Alle Fahrzeuge in die Boxengasse.'); radio('NOR', 'BOX-INFO', 'Rote Flagge, wir fahren in die Boxengasse. Reifenwechsel möglich?'); radio('LEC', 'TEAM', 'Sind alle okay?'); }
+    if (ev === 'sc') { say('yellow', 'SC', tr('demo.scMsg')); radio('LEC', 'BOX', tr('demo.r.scIn')); radio('HAM', 'TEAM', tr('demo.r.scStay')); }
+    if (ev === 'vsc') { say('yellow', 'VSC', tr('demo.vscMsg')); }
+    if (ev === 'yellow') { say('yellow', 'YELLOW', tr('demo.yellowMsg')); }
+    if (ev === 'red') { say('red', 'RED', tr('demo.redMsg')); radio('NOR', 'BOX-INFO', tr('demo.r.red')); radio('LEC', 'TEAM', tr('demo.r.ok')); }
   }
 
   function refreshPositions() {
@@ -184,7 +177,7 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
     d.sectorCls = d.sectors.map((v, k) => sectorClass(v, d.bestSec[k], overall[k]));
     if (flag === 'green' && (d.best == null || lap < d.best)) d.best = lap;
     if (kind === 'race' && flag === 'green' && (bestLapAll == null || lap < bestLapAll)) {
-      if (bestLapAll != null) say('', 'SCHNELLSTE', `Schnellste Runde: ${d.code} ${fmtLap(lap)}`);
+      if (bestLapAll != null) say('', 'FASTEST', tr('demo.fastest', { code: d.code, time: fmtLap(lap) }));
       bestLapAll = lap;
     }
     d.secT = [];
@@ -222,7 +215,7 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
         if (ahead && gap < GAP_SC * 0.5) rate = 0.3 / lapTime;
       }
       if (d.pit > 0) { rate *= 0.35; d.pit -= dt; if (d.pit <= 0) { d.pit = 0; } }
-      else if (flag === 'green' && d.tyreAge > 20 && rnd() < 0.002 * dt && d.stops < 2) { d.pit = 20; d.stops++; d.tyre = d.tyre === 'S' ? 'M' : 'H'; d.tyreAge = 0; say('', 'BOX', `${d.code} in der Box: Stopp ${d.stops}, neue ${d.tyre === 'M' ? 'Medium' : 'Hard'}-Reifen`); }
+      else if (flag === 'green' && d.tyreAge > 20 && rnd() < 0.002 * dt && d.stops < 2) { d.pit = 20; d.stops++; d.tyre = d.tyre === 'S' ? 'M' : 'H'; d.tyreAge = 0; say('', 'PIT', tr('demo.pitMsg', { code: d.code, n: d.stops, tyre: d.tyre === 'M' ? 'Medium' : 'Hard' })); }
       else if (flag === 'sc' && d.tyreAge > 12 && d.stops < 2 && rnd() < 0.01 * dt) { d.pit = 20; d.stops++; d.tyre = 'H'; d.tyreAge = 0; }
       advanceDriver(d, dt, rate);
       telemetry(d);
@@ -235,7 +228,7 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
         if (sorted[i].prog > lim) sorted[i].prog = lim;
       }
     }
-    if (lead.prog >= TOTAL_LAPS + 1 && flag !== 'chequered') { flag = 'chequered'; say('', 'ZIEL', 'Zielflagge. Das Rennen ist beendet.'); }
+    if (lead.prog >= TOTAL_LAPS + 1 && flag !== 'chequered') { flag = 'chequered'; say('', 'FINISH', tr('demo.finish')); }
   }
 
   function stepQuali(dt) {
@@ -272,16 +265,16 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
       stepRace(dt);
       if (flag === 'green' && rnd() < 0.004 * dtReal) {
         const v = drivers[Math.floor(rnd() * drivers.length)];
-        say('yellow', 'STRAFE', `Fahrzeug ${v.num} (${v.code}): 5 s Zeitstrafe wegen Verlassens der Strecke.`);
+        say('yellow', 'PENALTY', tr('demo.penalty', { num: v.num, code: v.code }));
       }
       if (rnd() < 0.01 * dtReal) { weather.air = clamp(weather.air + (rnd() - 0.5), 21, 28); weather.track = clamp(weather.track + (rnd() - 0.5) * 2, 32, 44); }
       if (flag === 'green' && rnd() < 0.05 * dtReal) {
-        const d = drivers[Math.floor(rnd() * 8)]; const r = RADIO[Math.floor(rnd() * RADIO.length)];
+        const d = drivers[Math.floor(rnd() * 8)]; const lines = radioLines(); const r = lines[Math.floor(rnd() * lines.length)];
         radio(d.code, r[0], r[1], true);
       }
     } else if (kind === 'quali' || kind === 'practice') {
       stepQuali(dt);
-      if (rnd() < 0.04 * dtReal) { const d = drivers[Math.floor(rnd() * 10)]; radio(d.code, 'TEAM', 'Verkehr in Kurve 4, ich musste aufmachen.', true); }
+      if (rnd() < 0.04 * dtReal) { const d = drivers[Math.floor(rnd() * 10)]; radio(d.code, 'TEAM', tr('demo.r.traffic'), true); }
     }
     if (kind !== 'upcoming') refreshPositions();
     if (feed.length > 60) feed.length = 60;
@@ -289,17 +282,17 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
 
   function state() {
     const base = {
-      now: nowMs(), flag, sourceNote: 'Simulierte Demo-Daten. Echte Daten: ?source=openf1 · Streckenlayouts: julesr0y/f1-circuits-svg (CC BY 4.0)',
+      now: nowMs(), flag, sourceNote: tr('src.note.sim'),
       weather: { air: Math.round(weather.air), track: Math.round(weather.track), rain: weather.rain }, track: { points: circuit.points, rotate: circuit.rotate }, feed: [...feed],
     };
     if (kind === 'upcoming') {
       return { ...base, flag: 'green', session: { type: 'upcoming', name: 'Rennen', meeting: meetingName(), circuit: circuit.name, startsAt: upcomingEnd }, drivers: [],
-        upcoming: { startsAt: upcomingEnd, nextLabel: 'Nächstes Rennen', meeting: meetingName(), circuit: circuit.name,
-          facts: circuit === MONZA ? [['Rundenlänge', '5.793 km'], ['Renndistanz', '53 Runden'], ['Layout', 'seit 2000'], ['DRS-Zonen', '2']] : [['Strecke', circuit.name], ['Renndistanz', `${TOTAL_LAPS} Runden`]],
-          schedule: [['Training 1', 'Fr 11:30'], ['Training 2', 'Fr 15:00'], ['Training 3', 'Sa 11:30'], ['Qualifying', 'Sa 15:00'], ['Rennen', 'So 14:00']],
-          weather: [['Lufttemperatur', '24 °C'], ['Streckentemperatur', '38 °C'], ['Regenwahrscheinlichkeit', '10 %'], ['Wind', '12 km/h SW']],
+        upcoming: { startsAt: upcomingEnd, nextLabel: 'sess.nextRace', meeting: meetingName(), circuit: circuit.name,
+          facts: circuit === MONZA ? [['fact.lapLength', '5.793 km'], ['fact.raceDistance', tr('fact.laps', { n: 53 })], ['fact.layout', tr('fact.since', { year: 2000 })], ['fact.drsZones', '2']] : [['fact.circuit', circuit.name], ['fact.raceDistance', tr('fact.laps', { n: TOTAL_LAPS })]],
+          schedule: [['Training 1', tr('wd.fri', { time: '11:30' })], ['Training 2', tr('wd.fri', { time: '15:00' })], ['Training 3', tr('wd.sat', { time: '11:30' })], ['Qualifying', tr('wd.sat', { time: '15:00' })], ['Rennen', tr('wd.sun', { time: '14:00' })]],
+          weather: [['wx.air', '24 °C'], ['wx.track', '38 °C'], ['wx.rainChance', '10 %'], ['wx.wind', '12 km/h SW']],
           standings: DRIVERS.slice(0, 10).map(([code], i) => ({ code, points: 310 - i * 21, wins: Math.max(0, 7 - i) })) },
-        feed: [{ id: 'rc0', kind: 'rc', t: baseNow - 3600000, tag: 'INFO', text: 'Der Funk startet mit der nächsten Session.' }] };
+        feed: [{ id: 'rc0', kind: 'rc', t: baseNow - 3600000, tag: 'INFO', text: tr('demo.radioNext') }] };
     }
     const leader = drivers[0];
     const session = kind === 'race'

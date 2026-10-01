@@ -1,7 +1,7 @@
 import { theme } from 'antd';
 
 // Ant Design im dunklen Pitwall-Look: kantig, Rennrot als Akzent.
-export const pitwallTheme = {
+const BASE = {
   algorithm: theme.darkAlgorithm,
   token: {
     colorPrimary: '#e8112d',
@@ -23,3 +23,15 @@ export const pitwallTheme = {
     Table: { headerBg: '#17171c', rowHoverBg: '#1e1e25', cellPaddingBlockSM: 6 },
   },
 };
+
+/** Theme für den Skalierungsfaktor k: Schrift, Abstände und Steuerelementhöhen von Ant Design wachsen mit der Oberfläche. */
+export function scaledTheme(k = 1) {
+  if (k === 1) return BASE;
+  return {
+    ...BASE,
+    token: { ...BASE.token, fontSize: Math.round(14 * k * 10) / 10, sizeUnit: 4 * k, sizeStep: 4 * k, controlHeight: Math.round(32 * k) },
+    components: { ...BASE.components, Table: { ...BASE.components.Table, cellPaddingBlockSM: Math.round(6 * k) } },
+  };
+}
+
+export const pitwallTheme = BASE;

@@ -281,10 +281,10 @@ test('demo has practice scenario, weather event and race-control extras', () => 
   const e = createDemoEngine({ scenario: 'race', seed: 5 });
   e.trigger('rain');
   assert.equal(e.state().weather.rain, true);
-  assert.ok(e.state().feed.some((m) => m.tag === 'WETTER'));
+  assert.ok(e.state().feed.some((m) => m.tag === 'WEATHER'));
   const tags = new Set();
   for (let i = 0; i < 4000; i++) { e.step(0.5); e.state().feed.slice(0, 3).forEach((m) => tags.add(m.tag)); }
-  assert.ok(tags.has('BOX') && tags.has('SCHNELLSTE'), [...tags].join());
+  assert.ok(tags.has('PIT') && tags.has('FASTEST'), [...tags].join());
 });
 
 const LOOP = samplePath(DB.monza.layouts.at(-1).d, 300);
@@ -840,4 +840,113 @@ test('openf1 client: requests of an abandoned session are dropped without using 
   gone = true;
   await assert.rejects(get('b', () => gone), /abgebrochen/);
   assert.equal(sent, 1, 'die abgebrochene Anfrage wurde nicht gesendet');
+});
+
+test('static cache: only immutable master data of past sessions, bounded by session count, never breaks on full storage', async () => {
+  const { createStaticCache, cacheKeyOf } = await import('../js/cache.js');
+  const mem = new Map();
+  const storage = { getItem: (k) => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => { mem.set(k, v); }, removeItem: (k) => { mem.delete(k); } };
+  const c = createStaticCache(storage, { maxSessions: 2 });
+  assert.equal(cacheKeyOf('laps?session_key=11377'), '11377');
+  assert.equal(cacheKeyOf('car_data?session_key=11377&date>=x'), null, 'Telemetrie-Fenster werden nicht gespeichert');
+  assert.equal(cacheKeyOf('sessions?year=2026'), null);
+  assert.equal(c.write('car_data?session_key=1', [1]), false);
+  assert.equal(c.read('laps?session_key=1'), undefined);
+  c.write('laps?session_key=1', [{ a: 1 }]); c.write('pit?session_key=1', [{ b: 2 }]);
+  assert.deepEqual(c.read('laps?session_key=1'), [{ a: 1 }]);
+  c.write('laps?session_key=2', [2]); c.write('laps?session_key=3', [3]); // Session 1 fliegt raus
+  assert.equal(c.read('laps?session_key=1'), undefined);
+  assert.equal(c.read('pit?session_key=1'), undefined, 'alle Einträge der verdrängten Session sind weg');
+  assert.deepEqual(c.read('laps?session_key=3'), [3]);
+  // voller Speicher: kein Fehler, Cache leert sich
+  const full = { ...storage, setItem: () => { throw new Error('QuotaExceededError'); } };
+  const c2 = createStaticCache(full);
+  assert.equal(c2.write('laps?session_key=9', [9]), false);
+  // ohne Speicher (Node): alles ist ein No-op
+  const none = createStaticCache(undefined);
+  assert.equal(none.write('laps?session_key=1', [1]), false);
+  assert.equal(none.read('laps?session_key=1'), undefined);
+});
+
+test('openf1 client defaults stay within the documented limits (3 per second, 30 per minute)', async () => {
+  let t = 0;
+  const times = [];
+  const get = createOpenF1Client({ fetchImpl: async () => { times.push(t); return { ok: true, json: async () => [] }; }, sleep: async (ms) => { t += ms; }, now: () => t });
+  for (let i = 0; i < 40; i++) await get(`laps?session_key=${i}`);
+  for (let i = 0; i < times.length; i++) {
+    assert.ok(times.filter((x) => x >= times[i] && x < times[i] + 1000).length <= 3, `höchstens 3 Anfragen pro Sekunde (ab ${times[i]} ms)`);
+    assert.ok(times.filter((x) => x >= times[i] && x < times[i] + 60000).length <= 30, `höchstens 30 Anfragen pro Minute (ab ${times[i]} ms)`);
+  }
+});
+
+test('i18n: German and English dictionaries have the same keys and placeholders', async () => {
+  const de = (await import('../js/locales/de.js')).default, en = (await import('../js/locales/en.js')).default;
+  assert.deepEqual(Object.keys(de).sort(), Object.keys(en).sort());
+  const vars = (s) => [...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort().join(',');
+  for (const k of Object.keys(de)) {
+    assert.equal(vars(de[k]), vars(en[k]), `Platzhalter von ${k} unterscheiden sich`);
+    assert.ok(typeof de[k] === 'string' && de[k].length && en[k].length, k);
+  }
+});
+
+test('i18n: every key used in the code exists, including dynamic families', async () => {
+  const de = (await import('../js/locales/de.js')).default;
+  const fs = await import('node:fs'), path = await import('node:path');
+  const files = [];
+  const walk = (d) => { for (const f of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, f.name); if (f.isDirectory()) { if (f.name !== 'locales') walk(p); } else if (/\.(js|jsx)$/.test(f.name)) files.push(p); } };
+  walk('js'); walk('src');
+  const used = new Set();
+  for (const f of files) for (const m of fs.readFileSync(f, 'utf8').matchAll(/\b(?:t|tr|tl)\(\s*'([a-zA-Z][\w.]*\.[\w.]+)'/g)) used.add(m[1]);
+  const missing = [...used].filter((k) => !(k in de));
+  assert.deepEqual(missing, [], 'fehlende Schlüssel: ' + missing.join(', '));
+  assert.ok(used.size > 150, `genug Schlüssel gefunden (${used.size})`);
+  for (const k of ['tab.upcoming', 'tab.race', 'tab.quali', 'tab.practice', 'tab.calendar', 'lang.de', 'lang.en', 'feed.cat.radio', 'feed.cat.rc', 'feed.cat.overtake', 'feed.cat.pit', 'feed.cat.dnf',
+    'rc.cat.flag', 'rc.cat.sc', 'rc.cat.ovt', 'rc.cat.weather', 'rc.cat.track', 'rc.cat.pit', 'rc.cat.steward', 'rc.cat.info', 'sess.fp1', 'sess.fp2', 'sess.fp3', 'sess.sprintq', 'sess.sprint', 'sess.quali', 'sess.race', 'sess.raceDone', 'sess.nextRace',
+    ...Array.from({ length: 8 }, (_, i) => `demo.radio.${i + 1}`)]) assert.ok(k in de, k);
+});
+
+test('i18n: switching to English changes the rendered UI, switching back restores German', async () => {
+  const i18n = await import('../js/i18n.js');
+  const { createDemoEngine: eng } = await import('../js/sources/demo.js');
+  try {
+    const e = eng({ scenario: 'race', seed: 3 }); run(e, 20);
+    const st = e.state();
+    const de = chrome(st, { sel: 3 }) + main(st, { sel: 3 });
+    assert.ok(de.includes('Rennen') && de.includes('Spitzengruppe') && de.includes('Grüne Flagge'));
+    i18n.setLang('en', { persist: false });
+    const en = chrome(st, { sel: 3 }) + main(st, { sel: 3 });
+    assert.ok(en.includes('Race') && en.includes('Leading group') && en.includes('Green flag') && en.includes('Preview'));
+    assert.ok(!en.includes('Spitzengruppe') && !en.includes('Grüne Flagge') && !en.includes('Vorschau'), 'kein deutscher Rest in der Kopfzeile und Hauptansicht');
+    assert.equal(i18n.t('cal.days', { n: 1 }), '1 day');
+    assert.equal(i18n.t('cal.days', { n: 3 }), '3 days');
+    assert.equal(i18n.dec('2.4'), '2.4');
+    assert.equal(i18n.speechLang(), 'en-GB');
+    i18n.setLang('de', { persist: false });
+    assert.equal(i18n.t('cal.days', { n: 1 }), '1 Tag');
+    assert.equal(i18n.dec('2.4'), '2,4');
+    assert.ok(chrome(st, { sel: 3 }).includes('Vorschau'));
+    assert.equal(i18n.t('does.not.exist'), 'does.not.exist', 'fehlender Schlüssel fällt auf den Schlüssel zurück');
+  } finally { i18n.setLang('de', { persist: false }); }
+});
+
+test('i18n: session names, race control headlines and demo texts follow the language', async () => {
+  const i18n = await import('../js/i18n.js');
+  const { sessionLabel, sameSession } = await import('../js/sessions.js');
+  const { describeRc } = await import('../js/racecontrol.js');
+  const { fmtSecs } = await import('../js/pitstops.js');
+  try {
+    assert.deepEqual(['Practice 1', 'Training 2', 'Sprint Qualifying', 'Race', 'Rennen', 'Q2'].map(sessionLabel), ['Training 1', 'Training 2', 'Sprint-Qualifying', 'Rennen', 'Rennen', 'Q2']);
+    assert.ok(sameSession('Race', 'Rennen') && sameSession('Qualifying', 'sess.quali') && !sameSession('Race', 'Qualifying') && sameSession('Rennen', 'sess.nextRace'));
+    assert.equal(fmtSecs(2.44), '2,4 s');
+    i18n.setLang('en', { persist: false });
+    assert.deepEqual(['Practice 1', 'Training 2', 'Sprint Qualifying', 'Race', 'Rennen', 'Q2'].map(sessionLabel), ['Practice 1', 'Practice 2', 'Sprint qualifying', 'Race', 'Race', 'Q2']);
+    assert.equal(fmtSecs(2.44), '2.4 s');
+    assert.equal(describeRc({ text: 'DOUBLE YELLOW IN TRACK SECTOR 3' }).title, 'Double yellow · Sector 3');
+    assert.equal(describeRc({ text: 'RISK OF RAIN FOR THE F1 RACE IS 10 %' }).title, 'Chance of rain 10 %');
+    const e = createDemoEngine({ scenario: 'race', seed: 3 }); e.trigger('rain');
+    assert.ok(e.state().feed.some((m) => m.text === 'Rain on track. Mind your tyre choice.'), 'Demo-Meldungen kommen in der Sprache');
+    const up = createDemoEngine({ scenario: 'upcoming' }).state().upcoming;
+    assert.deepEqual(up.schedule.map((x) => x[1])[0], 'Fri 11:30');
+    assert.equal(i18n.tl(up.facts[0][0]), 'Lap length');
+  } finally { i18n.setLang('de', { persist: false }); }
 });

@@ -9,7 +9,7 @@ import { yearsFor } from '../js/calendar.js';
 import { createOpenF1Source } from '../js/sources/openf1.js';
 
 const sessionId = (s) => `${s.session.type}|${s.session.name}|${s.session.circuit}`;
-const TAB_LABEL = { upcoming: 'Vorschau', race: 'Rennen', quali: 'Qualifying', practice: 'Training', calendar: 'Kalender' };
+const TAB_LABEL = { upcoming: 'tab.upcoming', race: 'tab.race', quali: 'tab.quali', practice: 'tab.practice', calendar: 'tab.calendar' }; // Schlüssel, übersetzt erst die Ladeanzeige
 const DEFAULT_SHOW = { radio: true, rc: true, overtake: true, pit: true, dnf: true }; // was unter "Alle" in der Ereignisliste steht
 const PENDING_MAX_MS = 30000; // spätestens dann verschwindet die Ladeanzeige, auch wenn nie Daten der Zielansicht kommen
 
@@ -118,7 +118,7 @@ export function useDashboard() {
       const data = await source.calendar(y, db || (await (await fetch('data/circuits.json')).json()));
       if (yearRef.current === y) setCal(data);
     } catch (e) {
-      if (yearRef.current === y) setCal({ year: y, races: [], error: `Kalender konnte nicht geladen werden (${e.message}).` });
+      if (yearRef.current === y) setCal({ year: y, races: [], error: e.message }); // Text übersetzt die Anzeige
     }
   }, [source, db]);
 
@@ -129,12 +129,12 @@ export function useDashboard() {
     tab(type) {
       if (type === 'calendar') { clearPending(); source.pause?.(true); setView('calendar'); loadCalendar(yearRef.current); } // Wiederholung anhalten
       else {
-        if (type !== core.current.prev?.session.type) startPending({ type, label: TAB_LABEL[type] || 'Ansicht' });
+        if (type !== core.current.prev?.session.type) startPending({ type, label: TAB_LABEL[type] || 'tab.race' });
         setView(null); source.select(type);
       }
     },
     year(y) { yearRef.current = y; setYear(y); loadCalendar(y); },
-    openRace(race) { startPending({ type: null, label: race?.meeting || 'Rennen' }); setView(null); source.openRace(race, db); },
+    openRace(race) { startPending({ type: null, label: race?.meeting || 'tab.race' }); setView(null); source.openRace(race, db); },
     pick: setSel,
     loadSeasons: () => loadSeasons(yearsFor()),
     toggleFeed() { setFeedOpen((o) => { try { localStorage.setItem('pitwall.feed', o ? 'closed' : 'open'); } catch { /* optional */ } return !o; }); },

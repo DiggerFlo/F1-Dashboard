@@ -2,10 +2,12 @@
 // OpenAI-Whisper-API oder Demo (bekannter Text der Simulation).
 
 export const ENGINES = [
-  { id: 'local', label: 'Lokal im Browser (Whisper)' },
-  { id: 'openai', label: 'OpenAI Whisper API' },
+  { id: 'local', get label() { return t('tr.local'); } },
+  { id: 'openai', get label() { return t('tr.openai'); } },
 ];
-export const DEMO_ENGINE = { id: 'demo', label: 'Demo-Transkript' };
+export const DEMO_ENGINE = { id: 'demo', get label() { return t('tr.demo'); } };
+
+import { t } from './i18n.js';
 
 const TRANSFORMERS_CDN = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3';
 const LOCAL_MODEL = 'Xenova/whisper-tiny.en';
@@ -37,12 +39,12 @@ async function openai(msg, { proxy, getKey, fetchImpl }) {
   const key = getKey && getKey();
   if (!key) throw new Error('Kein API-Key angegeben.');
   const audio = await fetchImpl(audioUrl(msg.url, proxy));
-  if (!audio.ok) throw new Error(`Audio nicht ladbar (${audio.status}). Evtl. blockiert CORS, siehe ?proxy=.`);
+  if (!audio.ok) throw new Error(t('tr.err.audio', { status: audio.status }));
   const fd = new FormData();
   fd.append('file', await audio.blob(), 'radio.mp3');
   fd.append('model', 'whisper-1');
   const r = await fetchImpl('https://api.openai.com/v1/audio/transcriptions', { method: 'POST', headers: { Authorization: `Bearer ${key}` }, body: fd });
-  if (!r.ok) throw new Error(`OpenAI-Fehler ${r.status}`);
+  if (!r.ok) throw new Error(t('tr.err.openai', { status: r.status }));
   return String((await r.json()).text || '').trim();
 }
 
@@ -60,10 +62,10 @@ export async function transcribe(engine, msg, opts = {}) {
     if (engine === 'local') return await local(msg, o);
     if (engine === 'openai') return await openai(msg, o);
   } catch (e) {
-    if (e instanceof TypeError) throw new Error('Audio oder Modell konnte nicht geladen werden (Netzwerk/CORS). Mit ?proxy=… lässt sich ein Proxy setzen.');
+    if (e instanceof TypeError) throw new Error(t('tr.err.network'));
     throw e;
   }
-  throw new Error(`Unbekannte Engine: ${engine}`);
+  throw new Error(t('tr.err.unknown', { engine }));
 }
 
 export function _resetForTests() { pipePromise = null; }

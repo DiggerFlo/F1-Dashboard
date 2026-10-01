@@ -2,6 +2,7 @@
 // Ist OpenF1 nicht erreichbar, springt die Demo auf die Simulation (demo.js) zurück.
 import { createOpenF1Source } from './openf1.js';
 import { createDemoSource } from './demo.js';
+import { t } from '../i18n.js';
 
 export function createReplayDemoSource({ failAfter = 30000, scenario = 'auto', speed = 2, ...opts } = {}) {
   const real = createOpenF1Source({ ...opts, speed, replayOnly: true });
@@ -12,7 +13,7 @@ export function createReplayDemoSource({ failAfter = 30000, scenario = 'auto', s
     if (seen || active === sim) return;
     real.stop();
     active = sim;
-    sim.start((s) => out({ ...s, problem: 'OpenF1 ist nicht erreichbar. Die Demo läuft mit simulierten Daten.' }));
+    sim.start((s) => out({ ...s, problem: t('src.fallback') }));
   }
 
   return {

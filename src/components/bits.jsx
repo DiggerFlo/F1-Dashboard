@@ -2,6 +2,7 @@ import { Card, Progress, Statistic, Tag } from 'antd';
 import { useState } from 'react';
 import { safeColor, fmtSector } from '../../js/format.js';
 import { tyreInfo, teamColor } from '../../js/teams.js';
+import { t } from '../../js/i18n.js';
 
 /** Fertiges SVG aus js/track.js einsetzen (alle Texte darin sind dort bereits escaped). */
 export function Html({ html, className }) {
@@ -10,8 +11,8 @@ export function Html({ html, className }) {
 
 /** Reifen in den Pirelli-Farben: Soft rot, Medium gelb, Hard weiß, Intermediate grün, Wet blau. */
 export function Tyre({ c }) {
-  const t = tyreInfo(c);
-  return <span className="tyre" style={t ? { '--tyre': t.color } : undefined} title={t ? t.name : 'unbekannt'}>{(c || '?')[0].toUpperCase()}</span>;
+  const ty = tyreInfo(c);
+  return <span className="tyre" style={ty ? { '--tyre': ty.color } : undefined} title={ty ? ty.name : t('tyre.unknown')}>{(c || '?')[0].toUpperCase()}</span>;
 }
 
 /** Teamfarbe als schmaler Balken; `color` aus den Live-Daten, sonst aus dem Teamnamen abgeleitet. */
@@ -24,7 +25,7 @@ export function Avatar({ d, size = 28 }) {
   const [bad, setBad] = useState(false);
   if (!d?.photo || bad) return null;
   return (
-    <span className="avatar" style={{ width: size, height: size, '--ac': safeColor(d.color) || teamColor(d.team) || 'var(--line)' }}>
+    <span className="avatar" style={{ width: `${size / 16}rem`, height: `${size / 16}rem`, '--ac': safeColor(d.color) || teamColor(d.team) || 'var(--line)' }}>
       <img src={d.photo} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" onError={() => setBad(true)} />
     </span>
   );
@@ -34,7 +35,7 @@ export function Avatar({ d, size = 28 }) {
 export function Face({ d, size = 42 }) {
   if (d?.photo) return <Avatar d={d} size={size} />;
   const ac = safeColor(d?.color) || teamColor(d?.team) || 'var(--line)';
-  return <span className="face" style={{ '--ac': ac, width: size, height: size, fontSize: Math.round(size * 0.36) }} aria-hidden="true">{(d?.code || '?').slice(0, 3)}</span>;
+  return <span className="face" style={{ '--ac': ac, width: `${size / 16}rem`, height: `${size / 16}rem`, fontSize: `${(size * 0.36) / 16}rem` }} aria-hidden="true">{(d?.code || '?').slice(0, 3)}</span>;
 }
 
 export function CodeCell({ d }) {

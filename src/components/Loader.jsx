@@ -1,3 +1,6 @@
+import { useEffect, useState } from 'react';
+import { t, tl } from '../../js/i18n.js';
+
 /** Speichen eines Rades (dreht sich), Mittelpunkt (cx, cy) und Radius der Felge. */
 const Spokes = ({ cx, cy, r }) => (
   <g className="lwheel" style={{ transformOrigin: `${cx}px ${cy}px` }} stroke="#9a9aa6" strokeWidth="1.6">
@@ -50,22 +53,30 @@ function Car() {
 }
 
 /** Ladeanzeige mit fahrendem Auto, Titel und Hinweis. */
-export function Loader({ title, sub }) {
+export function Loader({ title, sub, children }) {
   return (
     <div className="loader" role="status" aria-live="polite">
       <Car />
       <div className="lroad" aria-hidden="true" />
       <strong className="ltitle">{title}</strong>
       {sub && <span className="lsub">{sub}</span>}
+      {children}
     </div>
   );
+}
+
+/** Nach einigen Sekunden: ehrlicher Hinweis, warum es dauert (OpenF1 begrenzt Anfragen ohne Token). */
+function SlowHint() {
+  const [slow, setSlow] = useState(false);
+  useEffect(() => { const t = setTimeout(() => setSlow(true), 8000); return () => clearTimeout(t); }, []);
+  return slow ? <span className="lhint" role="status">{t('loader.slow')}</span> : null;
 }
 
 /** Halbtransparente Ebene über dem Inhalt (unter der Kopfzeile) beim Seitenwechsel, bis die Daten da sind. */
 export function LoadingOverlay({ label }) {
   return (
     <div className="overlay">
-      <Loader title={`${label} wird geladen`} sub="Die Daten werden bereitgemacht …" />
+      <Loader title={t('loader.title', { label: tl(label) })} sub={t('loader.sub')}><SlowHint /></Loader>
     </div>
   );
 }
