@@ -44,7 +44,7 @@ function speedProfile(f, num) {
 export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now() } = {}) {
   const rnd = mulberry32(seed);
   const baseNow = now;
-  let kind, simT, realT, flag, flagSince, feed, drivers, overall, remaining, upcomingEnd, autoIdx, weather, lastNow;
+  let seq = 0, kind, simT, realT, flag, flagSince, feed, drivers, overall, remaining, upcomingEnd, autoIdx, weather, lastNow;
 
   const AUTO = [
     [0, () => setKind('race')], [40, () => trigger('sc')], [75, () => trigger('green')], [95, () => trigger('red')],
@@ -83,8 +83,9 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
 
   const nowMs = () => (kind === 'upcoming' ? baseNow + realT * 1000 : baseNow + simT * 1000);
 
-  function say(level, tag, text) { feed.unshift({ kind: 'rc', t: nowMs(), level, tag, text }); }
-  function radio(code, tag, text) { feed.unshift({ kind: 'radio', t: nowMs(), code, tag, text }); }
+  function say(level, tag, text) { feed.unshift({ id: `rc${++seq}`, kind: 'rc', t: nowMs(), level, tag, text }); }
+  // Funk kommt wie bei echten Daten ohne Text; der gesprochene Inhalt steckt in `speech`.
+  function radio(code, tag, speech) { feed.unshift({ id: `rd${++seq}`, kind: 'radio', t: nowMs(), code, tag, speech }); }
 
   function trigger(ev) {
     if (kind !== 'race') return;
@@ -250,7 +251,7 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
           schedule: [['Training 1', 'Fr 11:30'], ['Training 2', 'Fr 15:00'], ['Training 3', 'Sa 11:30'], ['Qualifying', 'Sa 15:00'], ['Rennen', 'So 14:00']],
           weather: [['Lufttemperatur', '24 °C'], ['Streckentemperatur', '38 °C'], ['Regenwahrscheinlichkeit', '10 %'], ['Wind', '12 km/h SW']],
           standings: DRIVERS.slice(0, 10).map(([code], i) => ({ code, points: 310 - i * 21, wins: Math.max(0, 7 - i) })) },
-        feed: [{ kind: 'rc', t: baseNow - 3600000, tag: 'INFO', text: 'Der Funk startet mit der nächsten Session.' }] };
+        feed: [{ id: 'rc0', kind: 'rc', t: baseNow - 3600000, tag: 'INFO', text: 'Der Funk startet mit der nächsten Session.' }] };
     }
     const leader = drivers[0];
     const session = kind === 'race'

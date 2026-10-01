@@ -33,6 +33,16 @@ URL-Parameter wählen die Quelle:
 
 Grenzen der OpenF1-Anbindung: Funk gibt es nur als Audio (kein Transkript), Qualifying zeigt die beste Runde statt getrennter Q1/Q2/Q3, die Rundenzahl des Rennens ist nicht bekannt, Wetter-Prognose und Fahrerwertung fehlen in der Vorschau. Die Anbindung wurde ohne Netzzugang entwickelt und ist nur durch Unit-Tests der Flaggen-Logik abgedeckt, nicht gegen die echte API geprüft.
 
+## Funk abspielen und transkribieren
+
+Jeder Funkspruch hat einen Audio-Player und ein Dropdown **Transkribieren …**:
+
+- **Lokal im Browser (Whisper):** läuft per transformers.js (Modell `whisper-tiny.en`, lädt beim ersten Mal ca. 40 MB vom CDN). Kein Key, nichts verlässt den Browser außer dem Modell-Download.
+- **OpenAI Whisper API:** fragt beim ersten Mal nach einem API-Key (nur in `sessionStorage` dieses Tabs, nur an api.openai.com gesendet).
+- **Demo:** In der Simulation hat der Funk keinen Text, sondern nur gesprochenen Inhalt. „Abspielen“ nutzt die Sprachausgabe des Browsers, das Demo-Transkript liefert den Text.
+
+Seitenleiste und Audio werden nicht neu aufgebaut, laufende Wiedergabe, offene Dropdowns und fertige Transkripte bleiben beim Live-Update erhalten. Sperrt der Audio-Server CORS, hilft `?proxy=https://dein-proxy/?u={url}`.
+
 ## Aufbau
 
 ```
@@ -40,6 +50,8 @@ index.html, css/styles.css     Pitwall-Tokens und Komponenten
 js/main.js                     Quelle wählen, rendern, Klicks
 js/views.js                    alle Ansichten aus einem normalisierten Zustand
 js/track.js                    Streckenkarte und Telemetrie-Verlauf (SVG)
+js/feed.js                     Seitenleiste: Audio, Dropdown, Transkripte
+js/transcribe.js               Transkriptions-Engines (lokal, OpenAI, Demo)
 js/format.js                   Formatierung, Timing-Klassen, HTML-Escaping
 js/sources/demo.js             Simulation (Engine ohne Timer, testbar)
 js/sources/openf1.js           OpenF1-Adapter

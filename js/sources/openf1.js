@@ -153,8 +153,8 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
     rows.forEach((r, i) => { if (type === 'quali') r.pos = i + 1; });
     const leaderLap = Math.max(0, ...[...per.values()].map((o) => o.lap));
     const feed = [
-      ...control.map((m) => ({ kind: 'rc', t: Date.parse(m.date), level: m.flag === 'RED' ? 'red' : /YELLOW|SAFETY/i.test(`${m.flag} ${m.category}`) ? 'yellow' : '', tag: String(m.category || 'INFO').toUpperCase(), text: m.message })),
-      ...radioRows.map((r) => ({ kind: 'radio', t: Date.parse(r.date), code: drivers.get(r.driver_number)?.name_acronym, tag: 'FUNK', url: r.recording_url })),
+      ...control.map((m) => ({ id: `rc${m.date}${m.message}`, kind: 'rc', t: Date.parse(m.date), level: m.flag === 'RED' ? 'red' : /YELLOW|SAFETY/i.test(`${m.flag} ${m.category}`) ? 'yellow' : '', tag: String(m.category || 'INFO').toUpperCase(), text: m.message })),
+      ...radioRows.map((r) => ({ id: `rd${r.recording_url || r.date + r.driver_number}`, kind: 'radio', t: Date.parse(r.date), code: drivers.get(r.driver_number)?.name_acronym, tag: 'FUNK', url: r.recording_url })),
     ].sort((a, b) => b.t - a.t);
     return {
       now: replay ? now : Date.now(), flag, weather, feed, track: track || { points: [] }, drivers: rows, upcoming,

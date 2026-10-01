@@ -1,4 +1,4 @@
-import { esc, fmtLap, fmtSector, fmtGap, fmtClock, fmtTime, splitCountdown } from './format.js';
+import { esc, fmtLap, fmtSector, fmtGap, fmtClock, splitCountdown } from './format.js';
 import { trackSvg, tracesSvg } from './track.js';
 
 /*
@@ -145,17 +145,9 @@ function upcomingBody(state) {
   ${stand ? `<div class="sec"><div class="sech"><h3 class="disp">Fahrerwertung</h3><span class="label">Top 10</span></div><div class="tw"><table style="min-width:0"><thead><tr><th>Pos</th><th>Fahrer</th><th class="r">Punkte</th><th class="r">Siege</th></tr></thead><tbody>${stand}</tbody></table></div></div>` : ''}`;
 }
 
-function sidebar(state) {
-  const items = state.feed.slice(0, 40).map((m) => {
-    if (m.kind === 'radio') {
-      const audio = m.url ? `<audio controls preload="none" src="${esc(m.url)}"></audio>` : '';
-      return `<div class="msg"><div class="meta"><span class="who">${esc(m.code || '—')}</span><span class="t mono">${fmtTime(m.t)}</span><span class="tag">${esc(m.tag || 'FUNK')}</span></div>${m.text ? `<p>${esc(m.text)}</p>` : ''}${audio}</div>`;
-    }
-    const cls = m.level === 'red' ? ' rf' : m.level === 'yellow' ? ' fy' : '';
-    return `<div class="msg rc${cls}"><div class="meta"><span class="label">Race Control</span><span class="t mono">${fmtTime(m.t)}</span><span class="tag${m.level === 'yellow' ? ' y' : ''}">${esc(m.tag || 'INFO')}</span></div><p>${esc(m.text)}</p></div>`;
-  }).join('');
+export function renderSideHead(state) {
   const sub = state.session.type === 'upcoming' ? 'Offline' : state.flag === 'sc' ? 'Safety Car' : state.flag === 'red' ? 'Unterbrochen' : 'Live';
-  return `<aside class="side"><div class="sideh"><h3 class="disp">Funk</h3><span class="label">${sub}</span></div><div class="sidebody">${items || '<div class="empty">Noch keine Meldungen.</div>'}</div><div class="fine">${esc(state.sourceNote || '')}</div></aside>`;
+  return `<h3 class="disp">Funk</h3><span class="label">${sub}</span>`;
 }
 
 function toolbar(ui) {
@@ -164,16 +156,17 @@ function toolbar(ui) {
   return `<div class="toolbar" role="toolbar" aria-label="Demo-Steuerung"><span class="label">Demo</span>${b('ev-green', 'Grün')}${b('ev-yellow', 'Gelb')}${b('ev-sc', 'Safety Car')}${b('ev-vsc', 'VSC')}${b('ev-red', 'Rote Flagge')}<span class="label" style="margin-left:auto">Simulierte Daten</span></div>`;
 }
 
-export function renderApp(state, ui, hist, ref) {
+/** Kopfzeile, Banner und Hauptbereich. Die Seitenleiste lebt dauerhaft in main.js (Audio/Dropdowns). */
+export function renderChrome(state, ui) {
+  return `${topbar(state)}${toolbar(ui)}${banner(state)}`;
+}
+
+export function renderMain(state, ui, hist, ref) {
   const t = state.session.type;
-  let main;
-  if (t === 'upcoming') main = upcomingBody(state);
-  else {
-    const label = t === 'quali' ? 'Qualifying' : t === 'practice' ? 'Training' : 'Rennen';
-    const ttl = state.flag === 'sc' ? 'Live-Timing · Safety Car' : state.flag === 'red' ? 'Aufstellung beim Restart' : t === 'quali' ? 'Qualifying-Ergebnis' : 'Live-Timing';
-    main = `<div class="hero"><div class="card map"><div class="sech"><span class="label">Streckenlayout · ${label}${state.session.lap ? ' · Runde ' + state.session.lap : ''}</span><span class="label">${esc(state.session.circuit || '')}</span></div>${trackSvg(state, ui.sel)}</div><div class="kpis">${kpisFor(state)}</div></div>
+  if (t === 'upcoming') return upcomingBody(state);
+  const label = t === 'quali' ? 'Qualifying' : t === 'practice' ? 'Training' : 'Rennen';
+  const ttl = state.flag === 'sc' ? 'Live-Timing · Safety Car' : state.flag === 'red' ? 'Aufstellung beim Restart' : t === 'quali' ? 'Qualifying-Ergebnis' : 'Live-Timing';
+  return `<div class="hero"><div class="card map"><div class="sech"><span class="label">Streckenlayout · ${label}${state.session.lap ? ' · Runde ' + state.session.lap : ''}</span><span class="label">${esc(state.session.circuit || '')}</span></div>${trackSvg(state, ui.sel)}</div><div class="kpis">${kpisFor(state)}</div></div>
     <div class="sec"><div class="sech"><h3 class="disp">${ttl}</h3><span class="label">Zeile anklicken für Telemetrie</span></div><div class="tw">${timingTable(state, ui.sel)}</div></div>
     ${detail(state, ui.sel, hist, ref)}`;
-  }
-  return `${topbar(state)}${toolbar(ui)}${banner(state)}<div class="shell"><main class="main">${main}</main>${sidebar(state)}</div>`;
 }
