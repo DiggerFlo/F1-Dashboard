@@ -23,6 +23,15 @@ export function pointAt(points, f) {
   return points[0];
 }
 
+/** Dreht Punkte um den Mittelpunkt der Streckenpunkte (Ausrichtung wie auf formula1.com). */
+function rotator(points, deg) {
+  if (!deg) return (p) => p;
+  const b = bbox(points);
+  const cx = (b.minX + b.maxX) / 2, cy = (b.minY + b.maxY) / 2;
+  const r = (deg * Math.PI) / 180, c = Math.cos(r), s = Math.sin(r);
+  return (p) => [cx + (p[0] - cx) * c - (p[1] - cy) * s, cy + (p[0] - cx) * s + (p[1] - cy) * c];
+}
+
 function bbox(points) {
   const xs = points.map((p) => p[0]);
   const ys = points.map((p) => p[1]);
@@ -37,12 +46,14 @@ function bbox(points) {
 export function trackSvg(state, selNum) {
   const tr = state.track;
   if (!tr || !tr.points?.length) return '<div class="empty">Streckenlayout wird geladen …</div>';
-  const b = bbox(tr.points);
+  const rot = rotator(tr.points, tr.rotate);
+  const pts = tr.points.map(rot);
+  const b = bbox(pts);
   const pad = Math.max(b.maxX - b.minX, b.maxY - b.minY) * 0.08;
   const vx = b.minX - pad, vy = b.minY - pad;
   const vw = b.maxX - b.minX + pad * 2, vh = b.maxY - b.minY + pad * 2;
   const unit = Math.max(vw, vh) / 100; // 1 "Einheit" ≈ 1 % der Kartenbreite
-  const poly = tr.points.map((p) => p.join(',')).join(' ');
+  const poly = pts.map((p) => p.map((v) => v.toFixed(1)).join(',')).join(' ');
   const flag = state.flag;
   const out = [`<svg viewBox="${vx} ${vy} ${vw} ${vh}" role="img" aria-label="Streckenlayout mit Fahrerpositionen">`];
   const w = unit * 3;
@@ -58,19 +69,21 @@ export function trackSvg(state, selNum) {
   }
   const fs = unit * 1.9;
   (tr.sectors || []).forEach((f, i) => {
-    const [x, y] = pointAt(tr.points, f);
+    const [x, y] = rot(pointAt(tr.points, f));
     out.push(`<circle cx="${x}" cy="${y}" r="${unit * 0.8}" fill="#f5f5f3"/><text x="${x + unit * 1.6}" y="${y + unit * 3}" font-family="JetBrains Mono" font-size="${fs}" fill="#9a9aa6">S${i + 1}</text>`);
   });
   if (state.session.type === 'upcoming') {
     (tr.turns || []).forEach((f, i) => {
-      const [x, y] = pointAt(tr.points, f);
+      const [x, y] = rot(pointAt(tr.points, f));
       out.push(`<text x="${x - unit * 3}" y="${y - unit * 1.6}" font-family="JetBrains Mono" font-size="${fs}" fill="#9a9aa6">${i + 1}</text>`);
     });
   }
-  const labelled = new Set(state.drivers.slice(0, 5).map((d) => d.num));
+  const labelled = new Set(state.drivers.slice(0, flag === 'sc' || flag === 'vsc' || flag === 'red' ? 1 : 3).map((d) => d.num));
   const cars = state.drivers.filter((d) => d.x != null && d.onTrack !== false);
   const order = [...cars].sort((a, c) => (a.num === selNum) - (c.num === selNum));
-  for (const d of order) {
+  for (const car of order) {
+    const [cx, cy] = rot([car.x, car.y]);
+    const d = { ...car, x: cx, y: cy };
     const sel = d.num === selNum;
     const lead = d.pos === 1 && state.session.type === 'race' && flag !== 'red';
     const r = unit * (sel ? 1.5 : 1.1);
@@ -80,7 +93,7 @@ export function trackSvg(state, selNum) {
     }
   }
   if (state.safetyCar && state.safetyCar.x != null) {
-    const { x, y } = state.safetyCar;
+    const [x, y] = rot([state.safetyCar.x, state.safetyCar.y]);
     out.push(`<rect x="${x - unit * 1.6}" y="${y - unit * 1.6}" width="${unit * 3.2}" height="${unit * 3.2}" fill="#ffcc00"/><text x="${x}" y="${y + unit * 0.7}" text-anchor="middle" font-family="JetBrains Mono" font-size="${unit * 1.7}" font-weight="700" fill="#0b0b0e">SC</text>`);
   }
   out.push('</svg>');

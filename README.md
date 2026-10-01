@@ -33,6 +33,12 @@ URL-Parameter wählen die Quelle:
 
 Grenzen der OpenF1-Anbindung: Funk gibt es nur als Audio (kein Transkript), Qualifying zeigt die beste Runde statt getrennter Q1/Q2/Q3, die Rundenzahl des Rennens ist nicht bekannt, Wetter-Prognose und Fahrerwertung fehlen in der Vorschau. Die Anbindung wurde ohne Netzzugang entwickelt und ist nur durch Unit-Tests der Flaggen-Logik abgedeckt, nicht gegen die echte API geprüft.
 
+## Streckenlayouts
+
+Die Karten nutzen die Layouts aus [julesr0y/f1-circuits-svg](https://github.com/julesr0y/f1-circuits-svg) (CC BY 4.0, Namensnennung in `data/ATTRIBUTION.md` und in der Seitenleiste). `data/circuits.json` enthält alle Layouts mit Einsatz ab 2012. Neu erzeugen: `node scripts/build-circuits.mjs <pfad-zum-checkout>`.
+
+Mit OpenF1-Daten wird das Layout über `circuit_short_name`/`location` der Session gewählt (Saison bestimmt die Variante) und die Positionsdaten der Fahrer per Drehung, Skalierung und Spiegelung darauf abgebildet. Passt die Abbildung nicht (Abweichung > 8 % des Streckenradius), zeigt die App stattdessen den Umriss aus den Positionsdaten. Die Ausrichtung folgt `f1-orientation` wie auf formula1.com.
+
 ## Funk abspielen und transkribieren
 
 Jeder Funkspruch hat einen Audio-Player und ein Dropdown **Transkribieren …**:
@@ -50,6 +56,9 @@ index.html, css/styles.css     Pitwall-Tokens und Komponenten
 js/main.js                     Quelle wählen, rendern, Klicks
 js/views.js                    alle Ansichten aus einem normalisierten Zustand
 js/track.js                    Streckenkarte und Telemetrie-Verlauf (SVG)
+js/svgpath.js, js/fit.js       SVG-Pfad -> Punkte, Anpassung der Positionsdaten ans Layout
+js/circuits.js                 Session -> Layout (Aliase, Saison)
+data/circuits.json             Layouts (generiert, CC BY 4.0)
 js/feed.js                     Seitenleiste: Audio, Dropdown, Transkripte
 js/transcribe.js               Transkriptions-Engines (lokal, OpenAI, Demo)
 js/format.js                   Formatierung, Timing-Klassen, HTML-Escaping

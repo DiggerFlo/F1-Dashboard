@@ -1,6 +1,9 @@
 // Datenquelle für die OpenF1-API (https://openf1.org). Historische Sessions sind frei abrufbar
 // und werden als Wiederholung abgespielt; Live-Daten während einer Session brauchen ein Token.
 import { sectorClass } from '../format.js';
+import { findLayout } from '../circuits.js';
+import { samplePath } from '../svgpath.js';
+import { fitSimilarity } from '../fit.js';
 
 const BASE = 'https://api.openf1.org/v1';
 
@@ -45,8 +48,8 @@ function sessionType(name = '') {
 export function createOpenF1Source({ token = null, speed = 8, wantType = null, sessionKey = null } = {}) {
   let timer = null, stopped = false, onState = null;
   let session = null, upcoming = null, replay = false, t0 = 0, vStart = 0;
-  let drivers = new Map(), carData = new Map(), loc = new Map(), pos = new Map(), intervals = new Map(), laps = [], stints = [], control = [], radioRows = [], weather = null, track = null;
-  let lastSlow = 0, lastFast = 0, errors = 0, note = '';
+  let toTrack = (x, y) => [x, y], drivers = new Map(), carData = new Map(), loc = new Map(), pos = new Map(), intervals = new Map(), laps = [], stints = [], control = [], radioRows = [], weather = null, track = null;
+  let lastSlow = 0, lastFast = 0, errors = 0, note = '', layoutNote = '', nextSession = null;
 
   const headers = token ? { Authorization: `Bearer ${token}` } : {};
   async function get(path) {
@@ -73,6 +76,7 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
     upcoming = next ? { startsAt: Date.parse(next.date_start), nextLabel: next.session_name, meeting: next.location || next.circuit_short_name, circuit: `${next.circuit_short_name || ''} · ${next.country_name || ''}`.trim() } : null;
     upcoming = upcoming && { ...upcoming, schedule: list.filter((s) => s.meeting_key === next.meeting_key).map((s) => [s.session_name, new Date(s.date_start).toLocaleString('de-CH', { weekday: 'short', hour: '2-digit', minute: '2-digit' })]) };
     session = pick;
+    nextSession = next || null;
     if (session) {
       const live2 = Date.parse(session.date_start) <= now && now <= Date.parse(session.date_end);
       replay = !live2;
@@ -84,7 +88,10 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
     const k = session.session_key;
     const ds = await get(`drivers?session_key=${k}`);
     drivers = new Map(ds.map((d) => [d.driver_number, d]));
-    // Streckenlayout: Positionsdaten einer schnellen Runde eines Fahrers
+    // Streckenlayout: Positionsdaten einer Runde eines Fahrers, auf das Layout aus f1-circuits-svg abgebildet
+    toTrack = (x, y) => [x, y];
+    layoutNote = '';
+    let outline = null;
     try {
       const num = ds[0].driver_number;
       const ls = await get(`laps?session_key=${k}&driver_number=${num}&lap_number=3`);
@@ -93,9 +100,23 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
         const a = Date.parse(l.date_start);
         const pts = await get(`location?session_key=${k}&driver_number=${num}&date>${enc(iso(a))}&date<${enc(iso(a + l.lap_duration * 1000))}`);
         const clean = pts.filter((p, i) => i % 3 === 0 && (p.x || p.y)).map((p) => [p.x, -p.y]);
-        if (clean.length > 20) track = { points: clean };
+        if (clean.length > 20) outline = clean;
       }
     } catch { /* Layout optional */ }
+    let layout = null;
+    try {
+      const db = await (await fetch('data/circuits.json')).json();
+      layout = findLayout(db, session, new Date(session.date_start).getFullYear());
+    } catch { /* ohne Layoutdaten: eigene Umrisslinie */ }
+    if (layout) {
+      const pts = samplePath(layout.d, 300);
+      track = { points: pts, rotate: layout.rotate, name: layout.circuit };
+      if (outline) {
+        const fit = fitSimilarity(outline, pts);
+        if (fit.error < 0.08) toTrack = (x, y) => fit.map(x, y);
+        else { track = { points: outline }; layoutNote = ' · Layout passt nicht zu den Positionsdaten, zeige Umrisslinie'; }
+      } else { track = { points: pts, rotate: layout.rotate }; }
+    } else if (outline) track = { points: outline };
   }
 
   async function pollFast() {
@@ -104,7 +125,7 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
       get(`car_data?session_key=${k}&date>${enc(a)}&date<${enc(b)}`),
       get(`location?session_key=${k}&date>${enc(a)}&date<${enc(b)}`),
     ]);
-    carData = latestBy(cd); loc = new Map([...latestBy(lc)].map(([n, p]) => [n, { x: p.x, y: -p.y }]));
+    carData = latestBy(cd); loc = new Map([...latestBy(lc)].map(([n, p]) => { const [x, y] = toTrack(p.x, -p.y); return [n, { x, y }]; }));
     const iv = await get(`intervals?session_key=${k}&date>${enc(iso(now - 15000))}&date<${enc(b)}`);
     for (const [n, r] of latestBy(iv)) intervals.set(n, r);
     const ps = await get(`position?session_key=${k}&date>${enc(iso(now - 30000))}&date<${enc(b)}`);
@@ -158,7 +179,7 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
     ].sort((a, b) => b.t - a.t);
     return {
       now: replay ? now : Date.now(), flag, weather, feed, track: track || { points: [] }, drivers: rows, upcoming,
-      sourceNote: replay ? `OpenF1-Wiederholung (${speed}×): ${session.session_name}, ${session.location}` : `OpenF1 live: ${session.session_name}, ${session.location}`,
+      sourceNote: (replay ? `OpenF1-Wiederholung (${speed}×): ${session.session_name}, ${session.location}` : `OpenF1 live: ${session.session_name}, ${session.location}`) + layoutNote + ' · Streckenlayouts: julesr0y/f1-circuits-svg (CC BY 4.0)',
       session: { type, name: session.session_name, circuit: session.circuit_short_name, lap: leaderLap || null, totalLaps: null, flagSince: since, phase: replay ? 'replay' : 'live', cutoff: type === 'quali' ? 10 : null,
         remaining: type === 'quali' ? Math.max(0, (Date.parse(session.date_end) - now) / 1000) : null },
     };
@@ -181,7 +202,15 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
   }
 
   async function init() {
-    try { await chooseSession(); if (session) await loadStatic(); } catch (e) { note = `OpenF1 nicht erreichbar (${e.message}).`; }
+    try {
+      await chooseSession();
+      if (session) await loadStatic();
+      else if (nextSession) {
+        const db = await (await fetch('data/circuits.json')).json();
+        const l = findLayout(db, nextSession, new Date(nextSession.date_start).getFullYear());
+        if (l) track = { points: samplePath(l.d, 300), rotate: l.rotate };
+      }
+    } catch (e) { note = `OpenF1 nicht erreichbar (${e.message}).`; }
     tick();
   }
 

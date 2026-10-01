@@ -3,9 +3,10 @@
 import { sectorClass, clamp } from '../format.js';
 import { pointAt } from '../track.js';
 
-const POINTS = [[70, 200], [70, 120], [110, 70], [200, 60], [250, 100], [310, 70], [390, 60], [450, 100], [460, 160], [420, 200], [360, 190], [320, 230], [260, 250], [190, 240], [140, 210]];
-const SECTORS = [0, 0.34, 0.68];
-const TURNS = [0.06, 0.13, 0.2, 0.28, 0.37, 0.45, 0.55, 0.63, 0.72, 0.8, 0.9];
+import { DEMO_TRACK } from './demo-track.js';
+
+const POINTS = DEMO_TRACK.points;
+const SECTORS = [0, 0.34, 0.68]; // Sektorgrenzen der Simulation (Anteil der Runde)
 const DRIVERS = [['VAL', 'Valdor'], ['KRN', 'Kernes'], ['MOR', 'Moretti'], ['LUN', 'Lund'], ['BEC', 'Becker'], ['OSA', 'Osaki'], ['ROU', 'Rouvel'], ['TAN', 'Tanaka'], ['HAR', 'Harlow'], ['SIL', 'Silva'],
   ['DUP', 'Dupont'], ['NOV', 'Novak'], ['BRA', 'Braga'], ['KEL', 'Keller'], ['ANS', 'Ansel'], ['FAR', 'Farrow'], ['MEN', 'Mendez'], ['WIE', 'Wieland'], ['ZAN', 'Zanetti'], ['COL', 'Colby']];
 const COMPOUNDS = ['M', 'H', 'M', 'S', 'H', 'M', 'H', 'M', 'S', 'H', 'M', 'H', 'M', 'H', 'S', 'M', 'H', 'M', 'H', 'M'];
@@ -241,13 +242,13 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
 
   function state() {
     const base = {
-      now: nowMs(), flag, sourceNote: 'Simulierte Demo-Daten. Echte Daten: ?source=openf1',
-      weather, track: { points: POINTS, sectors: SECTORS, turns: TURNS }, feed: [...feed],
+      now: nowMs(), flag, sourceNote: 'Simulierte Demo-Daten. Echte Daten: ?source=openf1 · Streckenlayouts: julesr0y/f1-circuits-svg (CC BY 4.0)',
+      weather, track: { points: POINTS, rotate: DEMO_TRACK.rotate }, feed: [...feed],
     };
     if (kind === 'upcoming') {
-      return { ...base, flag: 'green', session: { type: 'upcoming', name: 'Rennen', meeting: 'Beispiel-GP', circuit: 'Circuit Demo', startsAt: upcomingEnd }, drivers: [],
-        upcoming: { startsAt: upcomingEnd, nextLabel: 'Nächstes Rennen', meeting: 'Beispiel-GP', circuit: 'Circuit Demo · Runde 18 von 24',
-          facts: [['Rundenlänge', '5.412 km'], ['Renndistanz', '57 Runden'], ['Rundenrekord', '1:32.418'], ['DRS-Zonen', '2']],
+      return { ...base, flag: 'green', session: { type: 'upcoming', name: 'Rennen', meeting: 'Großer Preis von Italien (Demo)', circuit: 'Autodromo Nazionale Monza', startsAt: upcomingEnd }, drivers: [],
+        upcoming: { startsAt: upcomingEnd, nextLabel: 'Nächstes Rennen', meeting: 'Großer Preis von Italien (Demo)', circuit: 'Autodromo Nazionale Monza',
+          facts: [['Rundenlänge', '5.793 km'], ['Renndistanz', '53 Runden'], ['Layout', 'seit 2000'], ['DRS-Zonen', '2']],
           schedule: [['Training 1', 'Fr 11:30'], ['Training 2', 'Fr 15:00'], ['Training 3', 'Sa 11:30'], ['Qualifying', 'Sa 15:00'], ['Rennen', 'So 14:00']],
           weather: [['Lufttemperatur', '24 °C'], ['Streckentemperatur', '38 °C'], ['Regenwahrscheinlichkeit', '10 %'], ['Wind', '12 km/h SW']],
           standings: DRIVERS.slice(0, 10).map(([code], i) => ({ code, points: 310 - i * 21, wins: Math.max(0, 7 - i) })) },
@@ -255,8 +256,8 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
     }
     const leader = drivers[0];
     const session = kind === 'race'
-      ? { type: 'race', name: 'Rennen', circuit: 'Circuit Demo', lap: Math.min(TOTAL_LAPS, Math.floor(leader.prog)), totalLaps: TOTAL_LAPS, flagSince }
-      : { type: 'quali', name: 'Q2', circuit: 'Circuit Demo', remaining, cutoff: 10, flagSince };
+      ? { type: 'race', name: 'Rennen', circuit: 'Autodromo Nazionale Monza', lap: Math.min(TOTAL_LAPS, Math.floor(leader.prog)), totalLaps: TOTAL_LAPS, flagSince }
+      : { type: 'quali', name: 'Q2', circuit: 'Autodromo Nazionale Monza', remaining, cutoff: 10, flagSince };
     const out = { ...base, session, drivers: drivers.map((d) => ({ ...d, onTrack: kind === 'quali' ? d.onTrack : true })) };
     if (flag === 'sc') { const [x, y] = pointAt(POINTS, leader.prog + 0.03); out.safetyCar = { x, y }; }
     return out;

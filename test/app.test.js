@@ -3,6 +3,10 @@ import assert from 'node:assert/strict';
 import { createDemoEngine } from '../js/sources/demo.js';
 import { flagFromControl, latestBy } from '../js/sources/openf1.js';
 import { fmtLap, fmtGap, fmtClock, sectorClass, esc, splitCountdown } from '../js/format.js';
+import { readFileSync } from 'node:fs';
+import { samplePath } from '../js/svgpath.js';
+import { fitSimilarity } from '../js/fit.js';
+import { findLayout, seasonsInclude } from '../js/circuits.js';
 import { renderChrome, renderMain } from '../js/views.js';
 import { transcribe, audioUrl, enginesFor, _resetForTests } from '../js/transcribe.js';
 
@@ -140,4 +144,43 @@ test('transcribe: local uses the loaded pipeline, errors are readable', async ()
   _resetForTests();
   await assert.rejects(transcribe('local', { url: 'u' }, { loader: async () => { throw new TypeError('Failed to fetch'); } }), /Netzwerk/);
   await assert.rejects(transcribe('openai', {}, {}), /kein Audio/);
+});
+
+const DB = JSON.parse(readFileSync(new URL('../data/circuits.json', import.meta.url), 'utf8'));
+
+test('circuits: layouts found by OpenF1 names and season', () => {
+  assert.equal(findLayout(DB, { circuit_short_name: 'Monza', location: 'Monza', year: 2025 }).id, 'monza-7');
+  assert.equal(findLayout(DB, { circuit_short_name: 'Sakhir', location: 'Sakhir', year: 2025 }).id, 'bahrain-1');
+  assert.equal(findLayout(DB, { circuit_short_name: 'Catalunya', year: 2022 }).id, 'catalunya-5');
+  assert.equal(findLayout(DB, { circuit_short_name: 'Catalunya', year: 2025 }).id, 'catalunya-6');
+  assert.equal(findLayout(DB, { circuit_short_name: 'Marina Bay', location: 'Singapore', year: 2018 }).id, 'marina-bay-3');
+  assert.equal(findLayout(DB, { circuit_short_name: 'Nirgendwo', year: 2025 }), null);
+  assert.ok(seasonsInclude('1958,1960-1962', 1961) && !seasonsInclude('1958,1960-1962', 1959));
+});
+
+test('svg path sampling gives closed, evenly spaced points', () => {
+  const pts = samplePath(DB.monza.layouts.at(-1).d, 200);
+  assert.equal(pts.length, 200);
+  const gaps = pts.map((p, i) => Math.hypot(p[0] - pts[(i + 1) % 200][0], p[1] - pts[(i + 1) % 200][1]));
+  assert.ok(Math.max(...gaps) < 3 * Math.min(...gaps.filter((g) => g > 0)) + 25);
+  for (const c of Object.values(DB)) for (const l of c.layouts) assert.equal(samplePath(l.d, 50).length, 50, l.id);
+});
+
+test('fit: recovers rotation, mirror, scale and offset of a track outline', () => {
+  const dst = samplePath(DB.spa ? DB.spa.layouts.at(-1).d : DB['spa-francorchamps'].layouts.at(-1).d, 240);
+  const ang = (137 * Math.PI) / 180, k = 17;
+  const rnd = (i) => ((Math.sin(i * 12.9898) * 43758.5453) % 1) * 0.6; // deterministisches Rauschen
+  const all = dst.filter((_, i) => i % 2 === 0).map(([x, y], i) => {
+    const mx = x, my = -y; // gespiegelt
+    return [(mx * Math.cos(ang) - my * Math.sin(ang)) * k + 4000 + rnd(i), (mx * Math.sin(ang) + my * Math.cos(ang)) * k - 9000 + rnd(i + 7)];
+  });
+  const src = all.slice(40).concat(all.slice(0, 40)); // anderer Startpunkt
+  const fit = fitSimilarity(src, dst);
+  assert.ok(fit.error < 0.03, `Fehler ${fit.error}`);
+  // Zuordnung: jeder abgebildete Punkt liegt auf dem Layout (< 4 Einheiten von 500)
+  const maxd = Math.max(...src.map(([x, y]) => { const [a, b] = fit.map(x, y); return Math.min(...dst.map((q) => Math.hypot(a - q[0], b - q[1]))); }));
+  assert.ok(maxd < 4, `max Abstand ${maxd}`);
+  // Kein Layout einer anderen Strecke passt
+  const wrong = fitSimilarity(src, samplePath(DB.monza.layouts.at(-1).d, 240));
+  assert.ok(wrong.error > fit.error * 2, 'falsches Layout wird schlechter bewertet');
 });
