@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { detectOvertakes } from '../js/overtakes.js';
+import { detectPitStops, detectRetirements } from '../js/pitstops.js';
+import { eventsFrom } from '../js/events.js';
 import { createCarAnimator } from '../js/track.js';
 import { createDemoSource } from '../js/sources/demo.js';
 import { createReplayDemoSource } from '../js/sources/replay-demo.js';
@@ -7,6 +9,9 @@ import { yearsFor } from '../js/calendar.js';
 import { createOpenF1Source } from '../js/sources/openf1.js';
 
 const sessionId = (s) => `${s.session.type}|${s.session.name}|${s.session.circuit}`;
+const TAB_LABEL = { upcoming: 'Vorschau', race: 'Rennen', quali: 'Qualifying', practice: 'Training', calendar: 'Kalender' };
+const DEFAULT_SHOW = { radio: true, rc: true, overtake: true, pit: true, dnf: true }; // was unter "Alle" in der Ereignisliste steht
+const PENDING_MAX_MS = 30000; // spätestens dann verschwindet die Ladeanzeige, auch wenn nie Daten der Zielansicht kommen
 
 /** ?source=openf1: Echtdaten (live, sonst Wiederholung) · ?source=sim: reine Simulation · sonst: Demo mit echten Renndaten (Wiederholung). */
 function makeSource(params) {
@@ -21,7 +26,7 @@ function makeSource(params) {
  * Hält Datenquelle, Zustand und Oberflächen-Zustand. onOvertake(list, colors) wird bei neuen
  * Überholmanövern aufgerufen, onSessionChange() beim Wechsel der Session.
  */
-export function useDashboard({ onOvertake, onSessionChange }) {
+export function useDashboard() {
   const [params] = useState(() => new URLSearchParams(location.search));
   const core = useRef(null);
   if (!core.current) core.current = { source: makeSource(params), animator: createCarAnimator(), hist: new Map(), prev: null };
@@ -30,17 +35,27 @@ export function useDashboard({ onOvertake, onSessionChange }) {
   const [state, setState] = useState(null);
   const [sel, setSel] = useState(null);
   const [filter, setFilter] = useState('all');
-  const [toasts, setToasts] = useState(true);
+  const [events, setEvents] = useState([]); // Überholungen, Boxenstopps, Ausfälle der laufenden Session
+  const [show, setShow] = useState(() => { try { return { ...DEFAULT_SHOW, ...JSON.parse(localStorage.getItem('pitwall.show') || '{}') }; } catch { return DEFAULT_SHOW; } });
   const [view, setView] = useState(null);
+  const viewRef = useRef(view); // im Kalender laufen Hinweise nicht weiter
+  viewRef.current = view;
   const [year, setYear] = useState(new Date().getFullYear());
   const [cal, setCal] = useState(null);
   const [db, setDb] = useState(null);
+  // Seitenwechsel, der noch auf Daten wartet: { type, label }. type null = bestimmte Session (Kalender), dann entscheidet der Wechsel der Session.
+  const [pending, setPending] = useState(null);
+  const pendRef = useRef(null), pendTimer = useRef(null);
+  const clearPending = useCallback(() => { clearTimeout(pendTimer.current); pendRef.current = null; setPending(null); }, []);
+  const startPending = (p) => {
+    clearTimeout(pendTimer.current);
+    pendRef.current = { ...p, startId: core.current.prev ? sessionId(core.current.prev) : null };
+    setPending({ type: p.type || null, label: p.label });
+    pendTimer.current = setTimeout(clearPending, PENDING_MAX_MS);
+  };
+  useEffect(() => () => clearTimeout(pendTimer.current), []);
   const [mapMode, setMapMode] = useState(() => { try { const m = params.get('map') || localStorage.getItem('pitwall.map'); return m === 'wide' ? 'wide' : 'normal'; } catch { return 'normal'; } });
   const [feedOpen, setFeedOpen] = useState(() => { try { return localStorage.getItem('pitwall.feed') !== 'closed'; } catch { return true; } });
-  const toastsRef = useRef(toasts);
-  toastsRef.current = toasts;
-  const cb = useRef({});
-  cb.current = { onOvertake, onSessionChange };
 
   useEffect(() => {
     fetch('data/circuits.json').then((r) => r.json()).then(setDb).catch(() => {});
@@ -50,13 +65,19 @@ export function useDashboard({ onOvertake, onSessionChange }) {
     source.start((s) => {
       const prev = core.current.prev;
       const same = prev && sessionId(prev) === sessionId(s);
+      const pd = pendRef.current; // Zielansicht ist da, sobald Typ bzw. Session passen und nichts mehr lädt
+      if (pd && !s.replay?.loading && (pd.type ? s.session.type === pd.type : sessionId(s) !== pd.startId)) clearPending();
       // Sprünge in der Wiederholung (Spulen, Laden) sind keine Überholmanöver
       const jumped = s.replay && (s.replay.loading || prev?.replay?.loading || (prev?.replay && Math.abs(s.replay.t - prev.replay.t) > 3000 * Math.max(1, s.replay.speed)));
-      if (same && toastsRef.current && !jumped) {
+      if (same && !jumped && viewRef.current !== 'calendar') {
         const color = new Map(s.drivers.map((d) => [d.code, d.color]));
         const found = detectOvertakes(prev, s).slice(0, 3);
-        if (found.length) cb.current.onOvertake(found.map((o) => ({ ...o, byColor: color.get(o.by), overColor: color.get(o.over) })));
-      } else if (!same) { cb.current.onSessionChange(); animator.reset(); }
+        const stops = detectPitStops(prev, s);
+        const out = detectRetirements(prev, s);
+        const fresh = eventsFrom({ found, stops, out, now: s.now, color });
+        if (fresh.length) setEvents((e) => [...fresh.filter((f) => !e.some((x) => x.id === f.id)), ...e].slice(0, 150));
+      } else if (!same) { animator.reset(); setEvents([]); }
+      setEvents((e) => (e.some((x) => x.t > s.now) ? e.filter((x) => x.t <= s.now) : e)); // zurückgespult: Ereignisse aus der Zukunft entfernen
       animator.update(s, performance.now());
       for (const d of s.drivers) {
         if (d.speed == null) continue;
@@ -69,7 +90,7 @@ export function useDashboard({ onOvertake, onSessionChange }) {
       setState(s);
     });
     return () => source.stop();
-  }, [source, animator, hist]);
+  }, [source, animator, hist, clearPending]);
 
   // Auswahl gültig halten: Standard ist der dritte Fahrer, sonst der erste
   const selected = state?.drivers.some((d) => d.num === sel) ? sel : state?.drivers[2]?.num ?? state?.drivers[0]?.num ?? null;
@@ -106,17 +127,20 @@ export function useDashboard({ onOvertake, onSessionChange }) {
 
   const actions = {
     tab(type) {
-      if (type === 'calendar') { setView('calendar'); loadCalendar(yearRef.current); }
-      else { setView(null); source.select(type); }
+      if (type === 'calendar') { clearPending(); source.pause?.(true); setView('calendar'); loadCalendar(yearRef.current); } // Wiederholung anhalten
+      else {
+        if (type !== core.current.prev?.session.type) startPending({ type, label: TAB_LABEL[type] || 'Ansicht' });
+        setView(null); source.select(type);
+      }
     },
     year(y) { yearRef.current = y; setYear(y); loadCalendar(y); },
-    openRace(race) { setView(null); source.openRace(race, db); },
+    openRace(race) { startPending({ type: null, label: race?.meeting || 'Rennen' }); setView(null); source.openRace(race, db); },
     pick: setSel,
     loadSeasons: () => loadSeasons(yearsFor()),
     toggleFeed() { setFeedOpen((o) => { try { localStorage.setItem('pitwall.feed', o ? 'closed' : 'open'); } catch { /* optional */ } return !o; }); },
     mapMode(m) { setMapMode(m); try { localStorage.setItem('pitwall.map', m); } catch { /* optional */ } },
     filter: setFilter,
-    toggleToasts() { setToasts((t) => { if (t) cb.current.onSessionChange(); return !t; }); },
+    showKind(k, v) { setShow((cur) => { const n = { ...cur, [k]: v }; try { localStorage.setItem('pitwall.show', JSON.stringify(n)); } catch { /* optional */ } return n; }); },
     trigger: (ev) => source.trigger(ev),
     replay: { pause: (f) => source.pause?.(f), speed: (v) => source.setSpeed?.(v), seek: (f) => source.seek?.(f) },
     source(id) {
@@ -126,6 +150,7 @@ export function useDashboard({ onOvertake, onSessionChange }) {
     },
   };
 
-  const ui = { seasons, feedOpen, mapMode, cinema: mapMode === 'wide' && view !== 'calendar' && !!state?.track?.points?.length, sel: selected, filter, toasts, demo: source.demo, sim: !!source.sim, view, year, cal, db, pos: animator.sample(performance.now()) };
+  const loading = pending ? { label: pending.label } : view === 'calendar' && !cal ? { label: TAB_LABEL.calendar } : null;
+  const ui = { events, show, loading, pendingType: pending?.type || null, seasons, feedOpen, mapMode, cinema: mapMode === 'wide' && view !== 'calendar' && !!state?.track?.points?.length, sel: selected, filter, demo: source.demo, sim: !!source.sim, view, year, cal, db, pos: animator.sample(performance.now()) };
   return { state, ui, actions, hist, animator, params };
 }

@@ -1,4 +1,5 @@
 import { esc, safeColor } from './format.js';
+import { arcPoints } from './pit.js';
 
 /** Punkt auf einem geschlossenen Polygonzug bei Anteil f (0..1) der Gesamtlänge. */
 export function pointAt(points, f) {
@@ -49,24 +50,54 @@ function pointAtFast(points, f) {
   return [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k];
 }
 
-/** Anteil (0..1) der Runde, an dem der Punkt (x,y) der Strecke am nächsten liegt. */
-export function nearestFraction(points, x, y) {
+/**
+ * Anteil (0..1) der Runde, an dem der Punkt (x,y) der Strecke am nächsten liegt.
+ * Mit hint (letzter Anteil des Autos) wird nur in dessen Umgebung (± window der Runde) gesucht, sonst springt das Auto
+ * an engen Stellen, an denen zwei Streckenabschnitte dicht beieinander liegen, auf den falschen. Liegt der Punkt
+ * dort weit neben der Strecke (Boxengasse, Neustart, Datensprung) oder klar näher an einer anderen Straße, gilt die Suche
+ * über die ganze Strecke.
+ */
+export function nearestFraction(points, x, y, hint = null, window = 0.15) {
   const { cum, total } = prep(points);
   const n = points.length;
-  let best = Infinity, bf = 0;
-  for (let i = 0; i < n; i++) {
-    const a = points[i], b = points[(i + 1) % n];
-    const dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy;
-    const k = l2 ? Math.max(0, Math.min(1, ((x - a[0]) * dx + (y - a[1]) * dy) / l2)) : 0;
-    const d = (x - a[0] - dx * k) ** 2 + (y - a[1] - dy * k) ** 2;
-    if (d < best) { best = d; bf = (cum[i] + k * (cum[i + 1] - cum[i])) / total; }
+  const h = hint == null || Number.isNaN(hint) ? null : ((hint % 1) + 1) % 1;
+  const scan = (limit) => {
+    let best = Infinity, bf = 0;
+    for (let i = 0; i < n; i++) {
+      if (limit != null) {
+        const m = (cum[i] + cum[i + 1]) / 2 / total;
+        const gap = Math.abs(m - h);
+        if (Math.min(gap, 1 - gap) > limit) continue;
+      }
+      const a = points[i], b = points[(i + 1) % n];
+      const dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy;
+      const k = l2 ? Math.max(0, Math.min(1, ((x - a[0]) * dx + (y - a[1]) * dy) / l2)) : 0;
+      const d = (x - a[0] - dx * k) ** 2 + (y - a[1] - dy * k) ** 2;
+      if (d < best) { best = d; bf = (cum[i] + k * (cum[i + 1] - cum[i])) / total; }
+    }
+    return [best, bf % 1];
+  };
+  if (h != null) {
+    const [dw, fw] = scan(window);
+    if (dw <= (0.03 * total) ** 2) {
+      // Nur wenn der Punkt klar (> 2,5-fach) näher an einer anderen Straße liegt, wird der Hinweis korrigiert
+      const [dg, fg] = scan(null);
+      return dg * 6.25 < dw ? fg : fw;
+    }
   }
-  return bf % 1;
+  return scan(null)[1];
+}
+
+/** Punkt, der um den Anteil frac der Runde vor (x, y) auf der Strecke liegt (Safety Car vor dem Führenden). */
+export function aheadOf(points, x, y, frac = 0.012) {
+  const [px, py] = pointAt(points, nearestFraction(points, x, y) + frac);
+  return { x: px, y: py };
 }
 
 /**
  * Bewegt die Fahrzeuge zwischen zwei Datenständen flüssig entlang der Strecke (nicht auf der Sehne).
  * update(state, now) bei jedem neuen Zustand, sample(now) pro Bild -> Map(num | 'sc' -> [x, y]).
+ * Autos in der Boxengasse (d.pit) werden nicht gezeigt: die Boxengasse liegt zu nah an der Strecke, um sie auf der Karte zu trennen.
  */
 export function createCarAnimator() {
   const cars = new Map();
@@ -83,7 +114,7 @@ export function createCarAnimator() {
     const cur = frac(c, now);
     let delta = (((f - cur) % 1) + 1) % 1;
     if (delta > 0.5) delta -= 1;
-    if (Math.abs(delta) > 0.3) { c.f0 = c.f1 = f; c.dur = 0; c.t0 = now; return; } // Sprung (Boxengasse, Neustart): nicht überblenden
+    if (Math.abs(delta) > 0.3) { c.f0 = c.f1 = f; c.dur = 0; c.t0 = now; return; } // Sprung (Neustart, Datenlücke): nicht überblenden
     c.f0 = cur; c.f1 = cur + delta; c.t0 = now; c.dur = dur;
   }
 
@@ -94,11 +125,22 @@ export function createCarAnimator() {
       const dur = lastT == null ? 500 : Math.min(3000, Math.max(150, now - lastT));
       lastT = now;
       const seen = new Set();
-      for (const d of state.drivers) {
-        if (d.x == null || d.onTrack === false) continue;
-        seen.add(d.num); track(d.num, nearestFraction(points, d.x, d.y), now, dur);
+      const done = []; // schon zugeordnete Autos: [x, y, Anteil]
+      const on = state.drivers.filter((d) => d.x != null && d.onTrack !== false && !d.pit && d.status !== 'out');
+      // Erst Autos mit bekannter Position, dann neue: sie übernehmen den Anteil des nächsten Autos (gleiche Straße),
+      // statt an engen Stellen die falsche Straße zu erwischen
+      for (const pass of [0, 1]) {
+        for (const d of on) {
+          const known = cars.get(d.num);
+          if ((pass === 0) !== !!known) continue;
+          let hint = known?.f1;
+          if (hint == null && done.length) hint = done.reduce((b, c) => (Math.hypot(c[0] - d.x, c[1] - d.y) < Math.hypot(b[0] - d.x, b[1] - d.y) ? c : b))[2];
+          const f = nearestFraction(points, d.x, d.y, hint);
+          done.push([d.x, d.y, f]);
+          seen.add(d.num); track(d.num, f, now, dur);
+        }
       }
-      if (state.safetyCar?.x != null) { seen.add('sc'); track('sc', nearestFraction(points, state.safetyCar.x, state.safetyCar.y), now, dur); }
+      if (state.safetyCar?.x != null) { seen.add('sc'); track('sc', nearestFraction(points, state.safetyCar.x, state.safetyCar.y, cars.get('sc')?.f1), now, dur); }
       for (const k of [...cars.keys()]) if (!seen.has(k)) cars.delete(k);
     },
     sample(now) {
@@ -171,17 +213,26 @@ export function trackSvg(state, selNum, pos = null) {
   const unit = Math.max(vw, vh) / 100; // 1 "Einheit" ≈ 1 % der Kartenbreite
   const poly = pts.map((p) => p.map((v) => v.toFixed(1)).join(',')).join(' ');
   const flag = state.flag;
+  const sectorMode = !!(tr.marshal?.length && state.sectorFlags);
   const out = [`<svg viewBox="${vx} ${vy} ${vw} ${vh}" data-rot="${rot.params}" data-unit="${unit}" role="img" aria-label="Streckenlayout mit Fahrerpositionen">`];
   const w = unit * 3;
   out.push(`<polygon points="${poly}" fill="none" stroke="#2e2e37" stroke-width="${w}" stroke-linejoin="round"/>`);
   out.push(`<polygon points="${poly}" fill="none" stroke="#17171c" stroke-width="${w * 0.75}" stroke-linejoin="round"/>`);
-  if (flag === 'sc' || flag === 'vsc' || flag === 'yellow') {
+  if (flag === 'sc' || flag === 'vsc' || (flag === 'yellow' && !sectorMode)) {
     out.push(`<polygon points="${poly}" fill="none" stroke="#ffcc00" stroke-width="${w * 0.75}" stroke-linejoin="round" opacity=".9"/>`);
     out.push(`<polygon points="${poly}" fill="none" stroke="#17171c" stroke-width="${w * 0.45}" stroke-linejoin="round"/>`);
   } else if (flag === 'red') {
     out.push(`<polygon points="${poly}" fill="none" stroke="#e8112d" stroke-width="${unit * 0.6}" stroke-dasharray="${unit * 2} ${unit * 2}"/>`);
-  } else {
-    out.push(`<polygon points="${poly}" fill="none" stroke="#9a9aa6" stroke-width="${unit * 0.25}" stroke-dasharray="${unit * 0.5} ${unit}"/>`);
+  }
+  if (sectorMode && flag !== 'sc' && flag !== 'vsc' && flag !== 'red') { // Gelb nur dort, wo es gilt (Marshal-Sektoren)
+    const N = tr.marshal.length;
+    for (const { n, level } of state.sectorFlags) {
+      if (n < 1 || n > N) continue;
+      const arc = arcPoints(tr.points, tr.marshal[n - 1], tr.marshal[n % N]).map(rot).map((p) => p.map((v) => v.toFixed(1)).join(',')).join(' ');
+      out.push(`<polyline data-flag="${n}" points="${arc}" fill="none" stroke="#ffcc00" stroke-width="${w * 0.75}" stroke-linecap="butt" stroke-linejoin="round"/>`);
+      out.push(`<polyline points="${arc}" fill="none" stroke="#17171c" stroke-width="${w * 0.45}" stroke-linecap="butt" stroke-linejoin="round"/>`);
+      if (level === 'double') out.push(`<polyline points="${arc}" fill="none" stroke="#ffcc00" stroke-width="${w * 0.12}" stroke-dasharray="${unit * 0.8} ${unit * 0.8}" stroke-linejoin="round"/>`);
+    }
   }
   const fs = unit * 1.9;
   (tr.sectors || []).forEach((f, i) => {
@@ -195,7 +246,9 @@ export function trackSvg(state, selNum, pos = null) {
     });
   }
   const labelled = new Set(state.drivers.slice(0, flag === 'sc' || flag === 'vsc' || flag === 'red' ? 1 : 3).map((d) => d.num));
-  const cars = state.drivers.filter((d) => d.x != null && d.onTrack !== false);
+  for (const d of state.drivers) if (d.status) labelled.add(d.num);
+  const tagOf = (d) => (d.status === 'out' ? ' DNF' : d.status === 'stopped' ? ' STOPP' : '');
+  const cars = state.drivers.filter((d) => d.x != null && d.onTrack !== false && !d.pit && d.status !== 'out'); // Ausgefallene werden ausgeblendet // in der Box: nicht zeigen
   const order = [...cars].sort((a, c) => (a.num === selNum) - (c.num === selNum));
   for (const car of order) {
     const at = pos?.get(car.num) || [car.x, car.y];
@@ -204,11 +257,12 @@ export function trackSvg(state, selNum, pos = null) {
     const sel = d.num === selNum;
     const lead = d.pos === 1 && state.session.type === 'race' && flag !== 'red';
     const r = unit * (sel ? 1.5 : 1.1);
-    const fill = safeColor(d.color) || '#f5f5f3';
+    const fill = d.status === 'out' ? '#55555e' : safeColor(d.color) || '#f5f5f3';
+    if (d.status) out.push(`<circle data-car="${d.num}" cx="${d.x}" cy="${d.y}" r="${r + unit * 0.9}" fill="none" stroke="${d.status === 'out' ? '#e8112d' : '#ffcc00'}" stroke-width="${unit * 0.4}" stroke-dasharray="${unit * 0.9} ${unit * 0.7}" data-ring/>`);
     if (lead) out.push(`<circle data-car="${d.num}" cx="${d.x}" cy="${d.y}" r="${r + unit * 0.9}" fill="none" stroke="#e8112d" stroke-width="${unit * 0.4}" data-ring/>`);
     out.push(`<circle data-car="${d.num}" cx="${d.x}" cy="${d.y}" r="${r}" fill="${fill}" stroke="${sel ? '#f5f5f3' : '#0b0b0e'}" stroke-width="${unit * (sel ? 0.5 : 0.35)}"/>`);
     if (labelled.has(d.num) || sel) {
-      out.push(`<text data-lab="${d.num}" x="${d.x + unit * 2}" y="${d.y - unit * 1.2}" font-family="JetBrains Mono" font-size="${fs}" font-weight="700" fill="#f5f5f3" stroke="#0b0b0e" stroke-width="${unit * 0.5}" paint-order="stroke">${esc(d.code)}</text>`);
+      out.push(`<text data-lab="${d.num}" x="${d.x + unit * 2}" y="${d.y - unit * 1.2}" font-family="JetBrains Mono" font-size="${fs}" font-weight="700" fill="#f5f5f3" stroke="#0b0b0e" stroke-width="${unit * 0.5}" paint-order="stroke">${esc(d.code)}${tagOf(d)}</text>`);
     }
   }
   if (state.safetyCar && state.safetyCar.x != null) {
@@ -220,7 +274,8 @@ export function trackSvg(state, selNum, pos = null) {
 }
 
 /** Telemetrie-Verlauf in drei Spuren (Geschwindigkeit, Gas, Bremse) aus einer Historie [{speed,throttle,brake}]. */
-export function tracesSvg(hist, ref) {
+export function tracesSvg(hist, ref, color = '#f5f5f3') {
+  const c = safeColor(color) || '#f5f5f3';
   const W = 560, H = 288, N = 80, L = 58, R = 8;
   const X = (i) => L + (i * (W - L - R)) / (N - 1);
   const h = hist.slice(-N), off = N - h.length; // neue Daten füllen von rechts
@@ -233,12 +288,14 @@ export function tracesSvg(hist, ref) {
   s += `<text x="${L - 8}" y="262" text-anchor="end" font-family="Inter" font-size="12" fill="#9a9aa6">Bremse</text><rect x="${L}" y="242" width="${W - L - R}" height="30" fill="#0b0b0e" stroke="#2e2e37"/>`;
   if (ref && ref.length > 1) { const r = ref.slice(-N); s += `<polyline points="${speed(r, N - r.length)}" fill="none" stroke="#b14bff" stroke-width="2" stroke-linejoin="round"/>`; }
   if (h.length > 1) {
-    s += `<polyline points="${speed(h, off)}" fill="none" stroke="#f5f5f3" stroke-width="2" stroke-linejoin="round"/>`;
+    s += `<polygon points="${X(off).toFixed(1)},${sy(0)} ${speed(h, off)} ${X(N - 1).toFixed(1)},${sy(0)}" fill="${c}" fill-opacity=".16"/>`;
+    s += `<polyline points="${speed(h, off)}" fill="none" stroke="${c}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>`;
     const area = (arr, y0, hgt, key) => `${X(off).toFixed(1)},${y0 + hgt} ` + arr.map((r, i) => `${X(i + off).toFixed(1)},${(y0 + hgt - (Math.min(100, r[key] || 0) / 100) * hgt).toFixed(1)}`).join(' ') + ` ${X(N - 1).toFixed(1)},${y0 + hgt}`;
-    s += `<polygon points="${area(h, 186, 30, 'throttle')}" fill="#9a9aa6" fill-opacity=".45" stroke="#9a9aa6" stroke-width="1"/>`;
-    s += `<polygon points="${area(h, 242, 30, 'brake')}" fill="#f5f5f3" fill-opacity=".55" stroke="#f5f5f3" stroke-width="1"/>`;
+    s += `<polygon points="${area(h, 186, 30, 'throttle')}" fill="#f5f5f3" fill-opacity=".4" stroke="#f5f5f3" stroke-width="1"/>`;
+    s += `<polygon points="${area(h, 242, 30, 'brake')}" fill="#e8112d" fill-opacity=".7" stroke="#e8112d" stroke-width="1"/>`;
     const last = h[h.length - 1];
-    s += `<circle cx="${X(N - 1)}" cy="${sy(last.speed)}" r="4" fill="#f5f5f3" stroke="#17171c" stroke-width="2"/>`;
+    s += `<circle cx="${X(N - 1)}" cy="${sy(last.speed)}" r="4.5" fill="${c}" stroke="#17171c" stroke-width="2"/>`;
+    s += `<text x="${X(N - 1) - 8}" y="${Math.max(12, sy(last.speed) - 8)}" text-anchor="end" font-family="JetBrains Mono" font-size="13" font-weight="700" fill="#f5f5f3">${Math.round(last.speed)}</text>`;
   } else {
     s += `<text x="${(W + L) / 2}" y="100" text-anchor="middle" font-family="Inter" font-size="13" fill="#9a9aa6">Messwerte werden gesammelt …</text>`;
   }

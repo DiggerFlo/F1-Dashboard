@@ -1,12 +1,14 @@
 // Datenquelle für die OpenF1-API (https://openf1.org). Historische Sessions sind frei abrufbar
 // und werden als Wiederholung abgespielt; Live-Daten während einer Session brauchen ein Token.
-import { sectorClass } from '../format.js';
+import { sectorClass, safePhoto } from '../format.js';
 import { findLayout } from '../circuits.js';
 import { buildOpenF1Calendar } from '../calendar.js';
 import { samplePath } from '../svgpath.js';
 import { fitSimilarity } from '../fit.js';
 import { createJolpica, buildJolpicaCalendar } from './jolpica.js';
 import { createReplayBuffer } from './replay-buffer.js';
+import { nearestFraction, aheadOf } from '../track.js';
+import { sectorFlagsFrom, stationaryTime } from '../pit.js';
 
 const BASE = 'https://api.openf1.org/v1';
 const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -20,9 +22,10 @@ export function createOpenF1Client({ base = BASE, headers = {}, fetchImpl = (...
   let chain = Promise.resolve();
   let last = 0, blockedUntil = 0;
   const stamps = [];
-  const slot = () => {
+  const slot = (cancelled) => {
     const p = chain.then(async () => {
       for (;;) {
+        if (cancelled?.()) return false; // Anfrage einer verlassenen Session: nicht mehr senden
         const t = now();
         while (stamps.length && stamps[0] <= t - 60000) stamps.shift();
         const wait = Math.max(last + minGap - t, blockedUntil - t, stamps.length >= maxPerMinute ? stamps[0] + 60000 - t + 50 : 0);
@@ -31,13 +34,14 @@ export function createOpenF1Client({ base = BASE, headers = {}, fetchImpl = (...
       }
       last = now();
       stamps.push(last);
+      return true;
     });
     chain = p.catch(() => {});
     return p;
   };
-  return async function get(path) {
+  return async function get(path, cancelled) {
     for (let attempt = 0; ; attempt++) {
-      await slot();
+      if (!(await slot(cancelled))) throw new Error('abgebrochen');
       const r = await fetchImpl(`${base}/${path}`, { headers });
       if (r.ok) return r.json();
       if (r.status === 404) return []; // "No results found."
@@ -51,6 +55,24 @@ export function createOpenF1Client({ base = BASE, headers = {}, fetchImpl = (...
   };
 }
 
+/**
+ * Streckendaten von MultiViewer (api.multiviewer.app): exakte Streckenlinie im Koordinatensystem der OpenF1-Positionen,
+ * Kurven, Marshal-Sektoren (die "TRACK SECTOR n" der Flaggen) und Boxenverlustzeit. Nur im Browser, Fehler sind nicht kritisch.
+ */
+export async function fetchCircuitInfo(session, fetchImpl = globalThis.fetch) {
+  if (typeof document === 'undefined' || !fetchImpl || session?.circuit_key == null) return null;
+  const year = new Date(session.date_start).getFullYear();
+  for (const y of [year, year - 1, year - 2]) { // Streckenlayout ist meist über Jahre gleich
+    try {
+      const r = await fetchImpl(`https://api.multiviewer.app/api/v1/circuits/${session.circuit_key}/${y}`);
+      if (!r.ok) continue;
+      const j = await r.json();
+      if (j?.x?.length > 50 && j.x.length === j.y?.length) return j;
+    } catch { /* nächstes Jahr */ }
+  }
+  return null;
+}
+
 const iso = (ms) => new Date(ms).toISOString().replace('Z', '+00:00');
 const enc = encodeURIComponent;
 
@@ -62,6 +84,17 @@ export function latestBy(rows, key = 'driver_number') {
 }
 
 /** Flaggenstatus aus den Race-Control-Meldungen (chronologisch) ableiten. */
+/** Overtake-Freigabe (ab 2026) aus Race Control: open true/false, null solange nichts gemeldet wurde. */
+export function overtakeFromControl(msgs) {
+  let open = null;
+  for (const m of msgs) {
+    const t = String(m.message || '').toUpperCase();
+    if (/^OVERTAKE ENABLED/.test(t)) open = true;
+    else if (/^OVERTAKE DISABLED/.test(t)) open = false;
+  }
+  return { open };
+}
+
 export function flagFromControl(msgs) {
   let flag = 'green', since = null;
   for (const m of msgs) {
@@ -119,24 +152,58 @@ export function mergeUpcoming(upcoming, extras, now = Date.now()) {
   return out;
 }
 
-export function createOpenF1Source({ token = null, speed = 8, wantType = null, sessionKey = null, jolpica = createJolpica(), client = null, replayOnly = false } = {}) {
+export function createOpenF1Source({ token = null, speed = 8, wantType = null, sessionKey = null, jolpica = createJolpica(), client = null, replayOnly = false, circuitInfo = fetchCircuitInfo } = {}) {
   let timer = null, stopped = false, onState = null;
   let session = null, upcoming = null, replay = false;
   // Wiederholung: virtuelle Uhr (Start, Tempo, Pause) und Puffer mit den geladenen Zeitfenstern
   let clock = { base: 0, at: 0, speed, paused: false, hold: false };
   let buffer = null, weatherRows = [], pits = [], loadingNow = false;
+  const stopSince = new Map(), stopCache = new Map(), stopLoading = new Set();
+  let stopBusy = 0; // laufende Einzelabfragen für Standzeiten (die Warteschlange ist knapp: höchstens 27 Anfragen pro Minute) // Ausfälle erkennen, Standzeiten der Boxenstopps
+  let lastBuildNow = null;
   const windowLoads = new Map();
   if (replayOnly && !wantType && !sessionKey) wantType = 'race';
   let toTrack = (x, y) => [x, y], drivers = new Map(), carData = new Map(), loc = new Map(), pos = new Map(), intervals = new Map(), laps = [], stints = [], control = [], radioRows = [], weather = null, track = null;
   let epoch = 0, pickedRace = null, pickedMeta = null, lastMedium = 0, lastSlow = 0, lastFast = 0, errors = 0, note = '', layoutNote = '', nextSession = null, extras = null;
 
-  const get = client || createOpenF1Client({ headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  const rawGet = client || createOpenF1Client({ headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  // Anfragen gehören zur Session-Epoche, in der sie gestellt wurden; nach einem Wechsel werden wartende Anfragen verworfen
+  const get = (path) => { const my = epoch; return rawGet(path, () => my !== epoch); };
   const vnow = () => (replay ? (clock.paused || clock.hold ? clock.base : clock.base + (Date.now() - clock.at) * clock.speed) : Date.now());
   const rebase = (patch = {}) => { clock = { ...clock, base: vnow(), at: Date.now(), ...patch }; };
   const sessionStart = () => Date.parse(session.date_start);
   const sessionEnd = () => Date.parse(session.date_end);
-  /** Einstieg in die Wiederholung: Rennen kurz nach dem Start, andere Sessions etwas später. */
-  const replayEntry = () => Math.min(sessionEnd() - 60000, sessionStart() + (sessionType(session.session_name) === 'race' ? 2 : 10) * 60000);
+  /**
+   * Echter Start des Rennens (Lights out): Race-Control "SESSION STARTED", sonst der Beginn von Runde 1.
+   * Die Daten beginnen schon mit der Einführungsrunde, date_start der Session ist nur der geplante Start.
+   */
+  const raceStart = () => {
+    if (!session || sessionType(session.session_name) !== 'race') return null;
+    const m = control.find((c) => c.category === 'SessionStatus' && /SESSION STARTED/i.test(c.message || ''));
+    if (m) return Date.parse(m.date);
+    const l1 = laps.filter((l) => l.lap_number === 1 && l.date_start).map((l) => Date.parse(l.date_start));
+    return l1.length ? Math.min(...l1) : null;
+  };
+  /**
+   * Zeitpunkt des Anrollens: Median der ersten Bewegung aller Fahrer rund um den Start (Reaktionszeit inklusive),
+   * damit die Ampel dort erlischt, wo die Autos auf der Karte tatsächlich losfahren. Ohne geladene Telemetrie der Start selbst.
+   */
+  let launchAt = null;
+  const lightsOut = () => {
+    const rs = raceStart();
+    if (rs == null) return null;
+    if (launchAt?.rs === rs) return launchAt.t;
+    const ts = buffer ? buffer.firstMoves(rs - 3000, rs + 8000).sort((a, b) => a - b) : [];
+    if (ts.length < 5) return rs;
+    launchAt = { rs, t: ts[Math.floor(ts.length / 2)] };
+    return launchAt.t;
+  };
+  /** Einstieg in die Wiederholung: Rennen kurz vor dem Start (Autos rollen zur Aufstellung), andere Sessions etwas später. */
+  const replayEntry = () => {
+    const rs = raceStart();
+    if (rs) return Math.max(sessionStart(), Math.min(sessionEnd() - 60000, rs - 40000));
+    return Math.min(sessionEnd() - 60000, sessionStart() + (sessionType(session.session_name) === 'race' ? 2 : 10) * 60000);
+  };
 
   /** Rennen ohne OpenF1-Session (künftig oder vor 2023): Vorschau mit dessen Streckenlayout. */
   function previewRace(r) {
@@ -196,7 +263,7 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
 
   async function loadStatic() {
     const k = session.session_key;
-    intervals = new Map(); pos = new Map(); carData = new Map(); loc = new Map(); laps = []; stints = []; control = []; radioRows = []; weather = null; weatherRows = []; pits = []; buffer = null; loadingNow = false; windowLoads.clear();
+    intervals = new Map(); pos = new Map(); carData = new Map(); loc = new Map(); laps = []; stints = []; control = []; radioRows = []; weather = null; weatherRows = []; pits = []; buffer = null; loadingNow = false; windowLoads.clear(); stopCache.clear(); stopLoading.clear(); stopSince.clear();
     const ds = await get(`drivers?session_key=${k}`);
     drivers = new Map(ds.map((d) => [d.driver_number, d]));
     // Streckenlayout: Positionsdaten einer Runde eines Fahrers, auf das Layout aus f1-circuits-svg abgebildet
@@ -228,7 +295,38 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
         else { track = { points: outline }; layoutNote = ' · Layout passt nicht zu den Positionsdaten, zeige Umrisslinie'; }
       } else { track = { points: pts, rotate: layout.rotate }; }
     } else if (outline) track = { points: outline };
+    await addCircuitInfo();
     if (replay) await loadReplayStatic(k);
+  }
+
+  /**
+   * Zusatzdaten von MultiViewer auf das Streckenlayout abbilden: Marshal-Sektoren (für Sektor-Flaggen), Kurven, Boxenverlustzeit.
+   * Die Positionen werden mit derselben Anpassung wie die Fahrzeuge auf das Layout gelegt. Ohne Daten bleibt alles wie es ist.
+   */
+  async function addCircuitInfo() {
+    if (!track?.points?.length) return;
+    const info = await circuitInfo(session).catch(() => null);
+    if (!info) return;
+    const frac = (c) => nearestFraction(track.points, ...toTrack(c.trackPosition.x, -c.trackPosition.y));
+    const list = (a) => (a || []).filter((c) => c.trackPosition).map(frac);
+    track = { ...track, pitLoss: info.pitLoss || null, marshal: list(info.marshalSectors), turns: list(info.corners) };
+  }
+
+  /** Standzeit (Sekunden stehend) eines Boxenstopps aus der Telemetrie; null, solange die Daten fehlen. */
+  function stopTime(p) {
+    if (typeof p.stop_duration === 'number') return p.stop_duration;
+    const id = `${p.driver_number}-${p.date}`;
+    if (stopCache.has(id)) return stopCache.get(id);
+    const end = Date.parse(p.date), lane = p.lane_duration || p.pit_duration || 22;
+    const from = end - (lane + 3) * 1000, to = end + 4000;
+    const { rows, covered } = buffer ? buffer.carRows(p.driver_number, from, to) : { rows: [], covered: false };
+    if (covered && rows.length) { const v = stationaryTime(rows, from, to); stopCache.set(id, v); return v; }
+    if (!stopLoading.has(id) && stopBusy < 2 && Math.abs(vnow() - end) < 10 * 60000) { // Fenster nicht geladen: nur kürzliche Stopps, höchstens 2 gleichzeitig
+      stopLoading.add(id); stopBusy++;
+      get(`car_data?session_key=${session.session_key}&driver_number=${p.driver_number}&date>${enc(iso(from))}&date<${enc(iso(to))}`)
+        .then((r) => stopCache.set(id, r.length ? stationaryTime(r.map((x) => ({ t: Date.parse(x.date), speed: x.speed })), from, to) : null)).catch(() => stopLoading.delete(id)).finally(() => { stopBusy--; });
+    }
+    return null;
   }
 
   /** Wiederholung: alles, was nicht zeitfensterweise geladen wird, einmal komplett holen. */
@@ -239,6 +337,7 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
     radioRows = await get(`team_radio?session_key=${k}`);
     weatherRows = await get(`weather?session_key=${k}`);
     pits = await get(`pit?session_key=${k}`);
+    clock = { ...clock, base: replayEntry(), at: Date.now() }; // Rennen: jetzt ist der Start bekannt
     buffer = createReplayBuffer({ origin: sessionStart() });
     buffer.setPositions(await get(`position?session_key=${k}`));
   }
@@ -277,6 +376,7 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
   async function pollSlow() {
     const k = session.session_key, b = iso(vnow());
     [laps, stints, radioRows] = await Promise.all([get(`laps?session_key=${k}`), get(`stints?session_key=${k}`), get(`team_radio?session_key=${k}&date<${enc(b)}`)]);
+    if (!replay) pits = await get(`pit?session_key=${k}`);
     const w = await get(`weather?session_key=${k}&date<${enc(b)}`);
     const last = w[w.length - 1];
     weather = last ? { air: Math.round(last.air_temperature), track: Math.round(last.track_temperature), rain: !!last.rainfall } : null;
@@ -293,6 +393,10 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
     let wx = weather;
     if (replay) { const w = weatherRows.filter((r) => Date.parse(r.date) <= now).pop(); wx = w ? { air: Math.round(w.air_temperature), track: Math.round(w.track_temperature), rain: !!w.rainfall } : null; }
     const { flag, since } = flagFromControl(ctl);
+    // Ab 2026 ersetzt der Overtake-Modus das DRS: OpenF1 liefert kein drs mehr und keinen Modus pro Auto,
+    // nur die Freigabe der Rennleitung ("OVERTAKE ENABLED/DISABLED"). Pro Auto wird nur die Reichweite abgeleitet.
+    const era2026 = new Date(session.date_start).getFullYear() >= 2026;
+    const overtake = era2026 ? overtakeFromControl(ctl) : null;
     const doneLaps = laps.filter((l) => l.lap_duration && Date.parse(l.date_start) + l.lap_duration * 1000 <= now);
     const per = new Map();
     for (const l of doneLaps) {
@@ -303,15 +407,24 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
       per.set(l.driver_number, o);
     }
     const overall = [0, 1, 2].map((i) => Math.min(...[...per.values()].map((o) => o.bestSec[i]).filter((v) => v != null)));
+    if (lastBuildNow != null && (now < lastBuildNow || now - lastBuildNow > 15000)) stopSince.clear(); // Sprung in der Wiederholung
+    lastBuildNow = now;
+    const rs = raceStart();
+    const raceOn = type === 'race' && (rs != null ? now > rs + 30000 : doneLaps.length > 0) && flag !== 'red' && flag !== 'chequered';
     const rows = [...drivers.values()].map((d) => {
-      const n = d.driver_number, o = per.get(n), c = carData.get(n), inPit = replay && pits.some((p) => p.driver_number === n && Date.parse(p.date) - 4000 <= now && now <= Date.parse(p.date) + ((p.pit_duration || p.lane_duration) || 22) * 1000 + 12000), p = loc.get(n), iv = intervals.get(n);
+      const n = d.driver_number, o = per.get(n), c = carData.get(n), pitRec = pits.find((p) => p.driver_number === n && Date.parse(p.date) - ((p.lane_duration || p.pit_duration) || 22) * 1000 - 3000 <= now && now <= Date.parse(p.date) + 4000), inPit = !!pitRec, p = loc.get(n), iv = intervals.get(n);
       const stint = stints.filter((s) => s.driver_number === n && s.lap_start <= (o?.lap || 1) + 1).sort((a, b) => b.stint_number - a.stint_number)[0];
       const secs = o?.last ? [o.last.duration_sector_1, o.last.duration_sector_2, o.last.duration_sector_3] : [null, null, null];
+      // Ausfall: steht im Rennen (nicht in der Box, keine rote Flagge) -> nach 4 s "steht", nach 30 s "ausgefallen"
+      const still = raceOn && !inPit && p && c?.speed != null && c.speed <= 2;
+      if (still) { if (!stopSince.has(n)) stopSince.set(n, now); } else stopSince.delete(n);
+      const idle = still ? now - stopSince.get(n) : 0;
+      const status = idle >= 30000 ? 'out' : idle >= 4000 ? 'stopped' : null;
       return {
-        num: n, code: d.name_acronym, name: d.last_name || d.full_name, team: d.team_name || null, color: d.team_colour ? `#${d.team_colour}` : null, pos: pos.get(n)?.position ?? 99, gap: iv?.gap_to_leader != null && typeof iv.gap_to_leader === 'number' ? iv.gap_to_leader : null,
+        num: n, code: d.name_acronym, name: d.last_name || d.full_name, team: d.team_name || null, color: d.team_colour ? `#${d.team_colour}` : null, photo: safePhoto(d.headshot_url), pos: pos.get(n)?.position ?? 99, gap: iv?.gap_to_leader != null && typeof iv.gap_to_leader === 'number' ? iv.gap_to_leader : null,
         interval: typeof iv?.interval === 'number' ? iv.interval : null, last: o?.last?.lap_duration ?? null, best: o?.best ?? null, sectors: secs,
         sectorCls: secs.map((v, i) => sectorClass(v, o?.bestSec[i], overall[i])), tyre: stint?.compound ? stint.compound[0] : null, stops: stint ? stint.stint_number - 1 : 0,
-        speed: c?.speed ?? null, throttle: c?.throttle ?? null, brake: c?.brake ?? null, gear: c?.n_gear ?? null, rpm: c?.rpm ?? null, drs: (c?.drs ?? 0) >= 10, pit: inPit ? 1 : 0, x: p?.x ?? null, y: p?.y ?? null, onTrack: !!p,
+        speed: c?.speed ?? null, throttle: c?.throttle ?? null, brake: c?.brake ?? null, gear: c?.n_gear ?? null, rpm: c?.rpm ?? null, drs: !era2026 && (c?.drs ?? 0) >= 10, ovt: era2026 && type === 'race' && overtake?.open === true && flag === 'green' && typeof iv?.interval === 'number' && iv.interval <= 1, pit: inPit ? 1 : 0, pitSince: inPit ? Date.parse(pitRec.date) - ((pitRec.lane_duration || pitRec.pit_duration) || 22) * 1000 : null, status, x: p?.x ?? null, y: p?.y ?? null, onTrack: !!p,
       };
     });
     if (type === 'quali') rows.sort((a, b) => (a.best ?? 1e9) - (b.best ?? 1e9)); else rows.sort((a, b) => a.pos - b.pos);
@@ -321,12 +434,26 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
       ...ctl.map((m) => ({ id: `rc${m.date}${m.message}`, kind: 'rc', t: Date.parse(m.date), level: m.flag === 'RED' ? 'red' : /YELLOW|SAFETY/i.test(`${m.flag} ${m.category}`) ? 'yellow' : '', tag: String(m.category || 'INFO').toUpperCase(), text: m.message })),
       ...radio.map((r) => ({ id: `rd${r.recording_url || r.date + r.driver_number}`, kind: 'radio', t: Date.parse(r.date), code: drivers.get(r.driver_number)?.name_acronym, tag: 'FUNK', url: r.recording_url })),
     ].sort((a, b) => b.t - a.t);
+    const pitStops = pits.filter((p) => Date.parse(p.date) <= now).sort((a, b) => Date.parse(a.date) - Date.parse(b.date)).map((p) => {
+      const d = drivers.get(p.driver_number);
+      const after = stints.find((x) => x.driver_number === p.driver_number && x.lap_start === p.lap_number + 1);
+      return { id: `${p.driver_number}-${p.date}`, num: p.driver_number, code: d?.name_acronym || String(p.driver_number), color: d?.team_colour ? `#${d.team_colour}` : null, team: d?.team_name || null, photo: safePhoto(d?.headshot_url),
+        lap: p.lap_number, lane: p.lane_duration ?? p.pit_duration ?? null, stop: stopTime(p), tyre: after?.compound ? after.compound[0] : null, at: Date.parse(p.date) };
+    });
+    // Das Safety Car steht nicht in den Positionsdaten: bei SC knapp vor dem Führenden darstellen (Näherung)
+    let safetyCar;
+    if (flag === 'sc' && track?.points?.length) {
+      const lead = rows.find((r) => r.x != null && !r.pit && r.status !== 'out');
+      if (lead) safetyCar = aheadOf(track.points, lead.x, lead.y);
+    }
     return {
-      now: replay ? now : Date.now(), flag, weather: wx, feed, track: track || { points: [] }, drivers: rows, upcoming: mergeUpcoming(upcoming, extras),
+      safetyCar, sectorFlags: track?.marshal?.length ? sectorFlagsFrom(ctl) : undefined, pitStops, pitLoss: track?.pitLoss || null,
+      now: replay ? now : Date.now(), flag, weather: wx, feed, track: track || { points: [] }, drivers: rows, overtake, upcoming: mergeUpcoming(upcoming, extras),
       problem: errors ? note : '',
       sourceNote: (replay ? `${replayOnly ? 'Demo' : 'OpenF1'}: Wiederholung (${clock.speed}×) mit echten Daten, ${session.session_name}, ${session.location}` : `OpenF1 live: ${session.session_name}, ${session.location}`) + layoutNote + ' · Daten: OpenF1, Jolpica F1 · Streckenlayouts: julesr0y/f1-circuits-svg (CC BY 4.0)',
       session: { key: session.session_key, type, name: session.session_name, circuit: session.circuit_short_name, lap: leaderLap || null, totalLaps: null, flagSince: since, phase: replay ? 'replay' : 'live', cutoff: type === 'quali' ? 10 : null,
         remaining: type === 'quali' ? Math.max(0, (Date.parse(session.date_end) - now) / 1000) : null },
+      startLights: replay && raceStart() ? { startsAt: lightsOut(), now, speed: clock.paused || clock.hold ? 0 : clock.speed, per: Math.min(clock.speed, 4) } : undefined,
       replay: replay ? { start: sessionStart(), end: sessionEnd(), t: now, speed: clock.speed, paused: clock.paused, loading: loadingNow } : undefined,
     };
   }
@@ -340,8 +467,10 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
         if (t - lastSlow > 15000) { await pollSlow(); lastSlow = t; }
         await pollFast();
       }
+      if (my !== epoch) return;
       errors = 0; note = '';
     } catch (e) {
+      if (my !== epoch) return; // Fehler einer verlassenen Session betrifft die neue nicht
       errors++; note = `OpenF1 nicht erreichbar (${e.message}). Wiederhole …`;
     }
     if (my !== epoch) return; // in der Zwischenzeit wurde eine andere Session gewählt
@@ -368,8 +497,10 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
       carData = smp.carData; intervals = smp.intervals; pos = smp.position;
       loc = new Map([...smp.location].map(([n, p]) => { const [x, y] = toTrack(p.x, -p.y); return [n, { x, y }]; }));
       buffer.evict(t);
+      if (my !== epoch) return;
       errors = 0; note = '';
     } catch (e) {
+      if (my !== epoch) return; // Fehler einer verlassenen Session betrifft die neue nicht
       errors++; note = `OpenF1 nicht erreichbar (${e.message}). Wiederhole …`;
       if (clock.hold) rebase({ hold: false });
       loadingNow = false;
@@ -407,7 +538,7 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
     stop() { stopped = true; clearTimeout(timer); },
     async calendar(year) {
       const [of1, jr] = await Promise.allSettled([
-        Promise.all([get(`meetings?year=${year}`), get(`sessions?year=${year}&session_name=Race`)]).then(([m, s]) => buildOpenF1Calendar(m, s)),
+        Promise.all([rawGet(`meetings?year=${year}`), rawGet(`sessions?year=${year}&session_name=Race`)]).then(([m, s]) => buildOpenF1Calendar(m, s)),
         jolpica.races(year),
       ]);
       // Jolpica kennt den vollen Kalender (auch künftige Rennen), OpenF1 liefert die Schlüssel zum Abspielen

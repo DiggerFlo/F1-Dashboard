@@ -49,13 +49,14 @@ function speedProfile(f, num) {
   return clamp(215 + 95 * Math.sin(2 * Math.PI * 3 * f + ph) + 45 * Math.sin(2 * Math.PI * 7 * f + 1), 70, 330);
 }
 
-export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now() } = {}) {
+export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now(), startGrid = 0 } = {}) {
   const rnd = mulberry32(seed);
   const baseNow = now;
   let circuit = MONZA, meetingLabel = null;
   const meetingName = () => `${meetingLabel || 'Großer Preis von Italien'} (Demo)`;
   let clips = new Map(); // code -> echte Funksprüche aus public/data/radio.json
   const clipPos = new Map();
+  let gridLeft = null; // Startampel: Sekunden bis zum Start (negativ = Lichter aus, noch kurz sichtbar)
   let seq = 0, bestLapAll = null, kind, simT, realT, flag, flagSince, feed, drivers, overall, remaining, upcomingEnd, autoIdx, weather, lastNow;
 
   const AUTO = [
@@ -74,6 +75,7 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
     kind = k; simT = 0; flag = 'green'; flagSince = null; feed = []; overall = [null, null, null]; bestLapAll = null;
     weather = { air: 24, track: 38, rain: false };
     drivers = DRIVERS.map((_, i) => newDriver(i));
+    gridLeft = k === 'race' && startGrid > 0 ? startGrid : null;
     if (k === 'race') {
       drivers.forEach((d, i) => { d.prog = 31 - i * 0.008; d.secStart = 0; });
     } else if (k === 'quali' || k === 'practice') {
@@ -256,6 +258,11 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
 
   function step(dtReal) {
     realT += dtReal;
+    if (kind === 'race' && gridLeft != null) {
+      gridLeft -= dtReal;
+      if (gridLeft <= -4.5) gridLeft = null;
+      else if (gridLeft > 0) return; // Feld steht, das Rennen wartet auf Lights out
+    }
     const dt = dtReal * speedFactor();
     simT += dt;
     if (scenario === 'auto') {
@@ -300,7 +307,7 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
       : kind === 'practice'
         ? { type: 'practice', name: 'Training 2', circuit: circuit.name, remaining, cutoff: null, flagSince }
         : { type: 'quali', name: 'Q2', circuit: circuit.name, remaining, cutoff: 10, flagSince };
-    const out = { ...base, session, drivers: drivers.map((d) => ({ ...d, onTrack: kind === 'quali' || kind === 'practice' ? d.onTrack : true })) };
+    const out = { ...base, startLights: kind === 'race' && gridLeft != null ? { startsAt: Date.now() + gridLeft * 1000, now: Date.now() } : undefined, session, drivers: drivers.map((d) => ({ ...d, onTrack: kind === 'quali' || kind === 'practice' ? d.onTrack : true })) };
     if (flag === 'sc') { const [x, y] = pointAt(circuit.points, leader.prog + 0.03); out.safetyCar = { x, y }; }
     return out;
   }
@@ -320,7 +327,7 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
 }
 
 export function createDemoSource(opts = {}) {
-  const engine = createDemoEngine(opts);
+  const engine = createDemoEngine({ startGrid: 6, ...opts });
   let timer = null, emit = null;
   return {
     id: 'demo',

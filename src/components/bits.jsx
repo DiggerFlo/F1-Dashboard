@@ -1,4 +1,5 @@
 import { Card, Progress, Statistic, Tag } from 'antd';
+import { useState } from 'react';
 import { safeColor, fmtSector } from '../../js/format.js';
 import { tyreInfo, teamColor } from '../../js/teams.js';
 
@@ -18,9 +19,28 @@ export function Swatch({ color, team }) {
   return <span className="tc" style={{ background: safeColor(color) || teamColor(team) || 'var(--line)' }} title={team || undefined} aria-hidden="true" />;
 }
 
+/** Fahrerfoto (offizielles Porträt) mit Teamfarbe als Unterkante; ohne Foto oder bei Ladefehler nichts. */
+export function Avatar({ d, size = 28 }) {
+  const [bad, setBad] = useState(false);
+  if (!d?.photo || bad) return null;
+  return (
+    <span className="avatar" style={{ width: size, height: size, '--ac': safeColor(d.color) || teamColor(d.team) || 'var(--line)' }}>
+      <img src={d.photo} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" onError={() => setBad(true)} />
+    </span>
+  );
+}
+
+/** Fahrerbild: Foto, sonst eine Kachel in Teamfarbe mit dem Kürzel. */
+export function Face({ d, size = 42 }) {
+  if (d?.photo) return <Avatar d={d} size={size} />;
+  const ac = safeColor(d?.color) || teamColor(d?.team) || 'var(--line)';
+  return <span className="face" style={{ '--ac': ac, width: size, height: size, fontSize: Math.round(size * 0.36) }} aria-hidden="true">{(d?.code || '?').slice(0, 3)}</span>;
+}
+
 export function CodeCell({ d }) {
   return (
     <>
+      <Avatar d={d} size={26} />
       <Swatch color={d.color} team={d.team} />
       <span className="code" title={[d.name, d.team].filter(Boolean).join(' · ')}>{d.code}</span>
     </>
@@ -35,11 +55,12 @@ export const Bar = ({ v, brake }) => (
 
 export const Badge = ({ kind, children }) => <Tag className={`badge ${kind || ''}`} bordered>{children}</Tag>;
 
-export function Kpi({ label, value, delta, cls = '' }) {
+export function Kpi({ label, value, delta, cls = '', accent = null, who = null }) {
   return (
-    <Card className="kpi" size="small">
+    <Card className={`kpi${who?.photo ? ' has-photo' : ''}`} size="small" style={accent ? { '--accent': accent } : undefined}>
       <Statistic title={label} value={value} groupSeparator="" />
       <span className={`d ${cls}`}>{delta}</span>
+      {who?.photo && <span className="kphoto"><Avatar d={who} size={72} /></span>}
     </Card>
   );
 }

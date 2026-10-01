@@ -1,9 +1,22 @@
 import { useEffect, useRef, useState } from 'react';
 import { CaretRightFilled, PauseOutlined } from '@ant-design/icons';
+import chimeUrl from '../../media/F1 Radio - Notification Sound.mp3';
 import { audioUrl } from '../../js/transcribe.js';
 import { BARS, estimateSpeech, fmtDur, loadPeaks, peaksFromText, pseudoPeaks } from '../../js/waveform.js';
 
 let stopCurrent = null; // es spielt immer nur ein Funkspruch
+
+/** Spielt den Funk-Signalton und wartet, bis er zu Ende (oder gestoppt) ist. Fehler (z. B. blockiertes Audio) überspringen ihn. */
+function playChime(ref) {
+  return new Promise((resolve) => {
+    try {
+      const a = new Audio(chimeUrl);
+      ref.current = a;
+      a.onended = a.onerror = a.onpause = () => resolve();
+      a.play().catch(() => resolve());
+    } catch { resolve(); }
+  });
+}
 
 /**
  * Funk-Player mit Wellenform: Play/Pause, Fortschritt in Teamfarbe, Klick zum Springen.
@@ -26,6 +39,8 @@ export function RadioPlayer({ m, color, proxy = null }) {
   const speech = useRef({ t0: 0 });
   const latest = useRef(null);
   const mine = useRef(null);
+  const chime = useRef(null);
+  const run = useRef(0); // zählt Starts/Stopps, damit ein Abbruch während des Signaltons den Funkspruch nicht doch noch startet
 
   // Wellenform erst laden, wenn der Eintrag im Sichtfeld ist (die Liste hat bis zu 40 Einträge)
   useEffect(() => {
@@ -41,6 +56,8 @@ export function RadioPlayer({ m, color, proxy = null }) {
   }, [m.url, proxy, isAudio]);
 
   const stop = () => {
+    run.current++;
+    chime.current?.pause();
     cancelAnimationFrame(raf.current);
     if (isAudio) audio.current?.pause();
     else window.speechSynthesis?.cancel();
@@ -73,11 +90,19 @@ export function RadioPlayer({ m, color, proxy = null }) {
     if (playing) { stop(); if (!isAudio) setProg(0); return; }
     stopCurrent?.();
     setError(null);
+    const token = ++run.current;
+    mine.current = () => latest.current();
+    stopCurrent = mine.current;
+    setPlaying(true);
+    if (prog < 0.02) { // jeder Funkspruch beginnt mit dem Signalton (beim Fortsetzen mitten im Spruch nicht)
+      await playChime(chime);
+      if (token !== run.current) return;
+    }
     if (isAudio) {
-      try { await audio.current.play(); } catch (e) { setError('Wiedergabe nicht möglich'); return; }
+      try { await audio.current.play(); } catch (e) { setError('Wiedergabe nicht möglich'); setPlaying(false); return; }
     } else {
       const synth = window.speechSynthesis;
-      if (!synth) { setError('Sprachausgabe nicht verfügbar'); return; }
+      if (!synth) { setError('Sprachausgabe nicht verfügbar'); setPlaying(false); return; }
       const u = new SpeechSynthesisUtterance(m.speech);
       u.lang = 'de-DE';
       u.onboundary = (e) => setProg((p) => Math.max(p, e.charIndex / m.speech.length));
@@ -86,9 +111,6 @@ export function RadioPlayer({ m, color, proxy = null }) {
       setProg(0);
       synth.speak(u);
     }
-    mine.current = () => latest.current();
-    stopCurrent = mine.current;
-    setPlaying(true);
     raf.current = requestAnimationFrame(tick);
   }
 
@@ -130,6 +152,7 @@ export function RadioPlayer({ m, color, proxy = null }) {
       >
         {peaks.map((p, i) => <i key={i} className={i < idx ? 'on' : i === idx && playing ? 'now' : ''} style={{ height: `${Math.round(p * 100)}%` }} />)}
       </div>
+      {playing && <span className="onair" aria-hidden="true">On air</span>}
       <span className="rp-time mono">{error ? <span className="err">{error}</span> : <>{fmtDur(prog * dur)}<span className="muted"> / {dur ? fmtDur(dur) : '–:––'}</span></>}</span>
     </div>
   );

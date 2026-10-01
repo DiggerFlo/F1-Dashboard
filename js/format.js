@@ -64,3 +64,8 @@ export function safeColor(c) {
   const v = c.trim().replace(/^#?/, '#');
   return /^#[0-9a-fA-F]{6}$/.test(v) ? v.toLowerCase() : null;
 }
+
+/** Fahrerfoto nur vom offiziellen F1-Medienserver (https), sonst null. */
+export function safePhoto(u) {
+  try { const x = new URL(String(u)); return x.protocol === 'https:' && x.hostname === 'media.formula1.com' ? x.href : null; } catch { return null; }
+}

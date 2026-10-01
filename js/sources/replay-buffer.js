@@ -47,6 +47,29 @@ export function createReplayBuffer({ origin, windowMs = 4 * 60000, maxAge = 1.5 
       windows.set(start, { carData: groupByDriver(carData), location: groupByDriver(location), intervals: groupByDriver(intervals) });
     },
     setPositions(rows) { positions = groupByDriver(rows); },
+    /** Telemetriezeilen { t, speed, ... } eines Fahrers in [from, to] aus den geladenen Fenstern; covered: alle betroffenen Fenster waren geladen. */
+    carRows(num, from, to) {
+      const rows = [];
+      let covered = true;
+      for (let st = startOf(from); st <= to; st += windowMs) {
+        const w = windows.get(st);
+        if (!w) { covered = false; continue; }
+        for (const r of w.carData.get(num) || []) if (r.t >= from && r.t <= to) rows.push(r);
+      }
+      return { rows, covered };
+    },
+    /** Je Fahrer der Zeitpunkt, an dem er in [from, to] erstmals schneller als minSpeed fährt (nur aus geladenen Fenstern). */
+    firstMoves(from, to, minSpeed = 3) {
+      const out = [];
+      for (const [start, w] of windows) {
+        if (start > to || start + windowMs < from) continue;
+        for (const arr of w.carData.values()) {
+          const r = arr.find((x) => x.t >= from && x.t <= to && x.speed >= minSpeed);
+          if (r) out.push(r.t);
+        }
+      }
+      return out;
+    },
     /** Zustand zum Zeitpunkt t: je Fahrer die letzten Messwerte (aus dem Fenster von t, sonst dem davor). */
     sample(t) {
       const out = { carData: new Map(), location: new Map(), intervals: new Map(), position: latest(positions, t) };

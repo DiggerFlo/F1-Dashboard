@@ -1,7 +1,11 @@
 import { test } from 'vitest';
 import assert from 'node:assert/strict';
+import { sectorFlagsFrom, stationaryTime, arcPoints } from '../js/pit.js';
+import { detectPitStops, fmtSecs } from '../js/pitstops.js';
+import { lightsFor, isRaceLabel } from '../js/startlights.js';
+import { detectRetirements } from '../js/pitstops.js';
 import { createDemoEngine, createDemoSource } from '../js/sources/demo.js';
-import { flagFromControl, latestBy, mergeUpcoming, createOpenF1Client, createOpenF1Source } from '../js/sources/openf1.js';
+import { flagFromControl, overtakeFromControl, latestBy, mergeUpcoming, createOpenF1Client, createOpenF1Source } from '../js/sources/openf1.js';
 import { createReplayBuffer, lastAtOrBefore } from '../js/sources/replay-buffer.js';
 import { createReplayDemoSource } from '../js/sources/replay-demo.js';
 import { mapDriverStandings, mapConstructorStandings, mapRaces, mapLastResult, buildJolpicaCalendar, createJolpica } from '../js/sources/jolpica.js';
@@ -12,7 +16,7 @@ import { fitSimilarity } from '../js/fit.js';
 import { findLayout, seasonsInclude } from '../js/circuits.js';
 import { buildOpenF1Calendar, buildDemoCalendar, yearsFor, raceStatus } from '../js/calendar.js';
 import { detectOvertakes } from '../js/overtakes.js';
-import { createCarAnimator, nearestFraction, pointAt } from '../js/track.js';
+import { createCarAnimator, nearestFraction, pointAt, trackSvg, aheadOf } from '../js/track.js';
 import { safeColor } from '../js/format.js';
 import { teamColor, tyreInfo } from '../js/teams.js';
 import { peaksFromSamples, peaksFromText, pseudoPeaks, fmtDur, estimateSpeech, loadPeaks } from '../js/waveform.js';
@@ -520,7 +524,7 @@ test('replay buffer: windows, latest sample per driver, eviction', () => {
 
 const fakeRace = () => {
   const now = Date.now();
-  const start = now - 3 * 3600000;
+  const start = Date.UTC(2025, 8, 21, 11); // fest in 2025: DRS-Ära (ab 2026 gilt der Overtake-Modus)
   const session = { session_key: 1, meeting_key: 1, session_name: 'Race', date_start: new Date(start).toISOString(), date_end: new Date(start + 2 * 3600000).toISOString(), circuit_short_name: 'Monza', location: 'Monza', country_name: 'Italy', year: new Date(start).getFullYear() };
   const t0 = start + 2 * 60000;
   const at = (s) => new Date(t0 + s * 1000).toISOString();
@@ -609,4 +613,231 @@ test('openf1 client: stays within the per-minute budget instead of running into 
   for (let i = 0; i < 7; i++) await get('x');
   assert.equal(times.length, 7);
   for (let i = 3; i < 7; i++) assert.ok(times[i] - times[i - 3] >= 60000, `Anfrage ${i} kommt erst nach 60 s Abstand zur drittletzten`);
+});
+
+test('start lights: one red light per second, all out at the start', () => {
+  assert.equal(lightsFor(60).visible, false);
+  assert.equal(lightsFor(5.5).lit, 0);
+  assert.deepEqual([5, 4, 3, 2, 1].map((s) => lightsFor(s - 0.1).lit), [1, 2, 3, 4, 5]);
+  assert.deepEqual(lightsFor(0.2), { visible: true, lit: 5, go: false });
+  assert.deepEqual(lightsFor(0), { visible: true, lit: 0, go: true });
+  assert.equal(lightsFor(-5).visible, false);
+  assert.ok(isRaceLabel('Nächstes Rennen') && isRaceLabel('Race') && !isRaceLabel('Qualifying'));
+});
+
+test('demo race holds the field for the start lights, then lights out releases it', () => {
+  const e = createDemoEngine({ scenario: 'race', startGrid: 6 });
+  const p0 = e.state().drivers[0].prog;
+  for (let i = 0; i < 10; i++) e.step(0.5); // 5 s: Ampel läuft, Feld steht
+  assert.ok(e.state().startLights);
+  assert.equal(e.state().drivers[0].prog, p0);
+  for (let i = 0; i < 4; i++) e.step(0.5); // Start bei 6 s
+  assert.ok(e.state().drivers[0].prog > p0);
+  for (let i = 0; i < 12; i++) e.step(0.5);
+  assert.equal(e.state().startLights, undefined);
+  assert.equal(createDemoEngine({ scenario: 'race' }).state().startLights, undefined);
+});
+
+test('nearestFraction with a hint stays on its own road where two sections are close', () => {
+  const NARROW = [[0, 0], [100, 0], [100, 4], [0, 4]]; // zwei Straßen nur 4 Einheiten auseinander
+  const own = 50 / 208;                                // Mitte der unteren Geraden
+  assert.ok(Math.abs(nearestFraction(NARROW, 50, 2.5) - (100 + 4 + 50) / 208) < 1e-6, 'ohne Hinweis springt es auf die obere Straße');
+  assert.ok(Math.abs(nearestFraction(NARROW, 50, 2.5, own) - own) < 1e-6);
+  assert.ok(Math.abs(nearestFraction(NARROW, 50, 20, own) - (100 + 4 + 50) / 208) < 1e-6, 'weit neben der Strecke: Fallback auf die ganze Strecke');
+  const car = createCarAnimator();
+  const st = (y) => ({ track: { points: NARROW }, drivers: [{ num: 1, x: 50, y }] });
+  car.update(st(0.2), 0); car.update(st(2.5), 500); car.update(st(2.5), 1000);
+  const [, y] = car.sample(1500).get(1);
+  assert.ok(y < 0.5, `Auto bleibt auf der unteren Straße (y=${y})`);
+});
+
+test('car animator: new cars next to a known car stay on the same road, and a clearly wrong road is corrected', () => {
+  const NARROW = [[0, 0], [100, 0], [100, 4], [0, 4]];
+  const car = createCarAnimator();
+  const st = (ds) => ({ track: { points: NARROW }, drivers: ds.map(([num, x, y]) => ({ num, x, y })) });
+  car.update(st([[1, 50, 0.2], [2, 51, 2.5]]), 0); // Auto 2 ist näher an der oberen Straße, steht aber im Pulk von Auto 1
+  assert.ok(car.sample(0).get(2)[1] < 0.5, 'Auto 2 übernimmt die Straße von Auto 1');
+  car.update(st([[1, 52, 0.2], [2, 52, 3.5]]), 500);  // jetzt klar an der oberen Straße
+  assert.ok(car.sample(5000).get(2)[1] > 3.5, 'klar falsche Straße wird korrigiert');
+});
+
+test('replay source: enters shortly before the real race start and exposes it for the start lights', async () => {
+  const { client, jolpica, session } = fakeRace();
+  const rs = Date.parse(session.date_start) + 5 * 60000; // Einführungsrunde zuerst, Lights out erst nach 5 min
+  const withStart = async (path) => (path.startsWith('race_control') ? [{ date: new Date(rs).toISOString(), category: 'SessionStatus', flag: null, message: 'SESSION STARTED' }] : client(path));
+  const src = createOpenF1Source({ client: withStart, jolpica, replayOnly: true, speed: 1 });
+  const states = [];
+  src.start((s) => states.push(s));
+  await waitFor(() => states.some((s) => s.drivers.length && s.startLights));
+  const s = states.at(-1);
+  assert.equal(s.startLights.startsAt, rs);
+  assert.ok(s.replay.t >= rs - 41000 && s.replay.t < rs - 30000, 'Einstieg ca. 40 s vor dem Start');
+  src.stop();
+});
+
+// ---------- Boxengasse, Sektor-Flaggen, Ausfälle ----------
+const BOX = [[0, 0], [2000, 0], [2000, 1000], [0, 1000]];
+test('sector flags: only flagged marshal sectors are coloured, clear and green remove them', () => {
+  const msg = (flag, sector, scope = 'Sector') => ({ category: 'Flag', flag, scope, sector });
+  assert.deepEqual(sectorFlagsFrom([msg('YELLOW', 3), msg('DOUBLE YELLOW', 5), msg('YELLOW', 3), msg('CLEAR', 5)]), [{ n: 3, level: 'yellow' }]);
+  assert.deepEqual(sectorFlagsFrom([msg('YELLOW', 3), msg('GREEN', null, 'Track')]), []);
+  const state = (flags, flag = 'yellow') => ({ flag, session: { type: 'race' }, drivers: [], sectorFlags: flags, track: { points: BOX, marshal: [0, 0.25, 0.5, 0.75] } });
+  const svg = trackSvg(state([{ n: 2, level: 'yellow' }]), null);
+  assert.equal((svg.match(/data-flag=/g) || []).length, 1, 'nur Sektor 2');
+  assert.ok(!svg.includes('<polygon points') || (svg.match(/stroke="#ffcc00"/g) || []).length === 1, 'nicht die ganze Strecke gelb');
+  const legacy = trackSvg({ ...state(undefined), sectorFlags: undefined }, null);
+  assert.ok(legacy.includes('<polygon') && (legacy.match(/stroke="#ffcc00"/g) || []).length >= 1, 'ohne Sektoren: wie bisher ganze Strecke');
+  const arc = arcPoints(BOX, 0.25, 0.5).map((p) => p.map(Math.round));
+  assert.deepEqual(arc, [[1500, 0], [2000, 0], [2000, 1000]], 'Teilstück der Strecke zwischen zwei Marshal-Sektoren');
+});
+
+test('cars in the pit are not drawn on the map, they come back on the track when they leave', () => {
+  const car = createCarAnimator();
+  const state = (pit) => ({ session: { type: 'race' }, flag: 'green', track: { points: BOX }, drivers: [{ num: 1, code: 'NOR', pos: 1, x: 900, y: 2, pit }, { num: 2, code: 'LEC', pos: 2, x: 1500, y: 2 }] });
+  car.update(state(1), 0);
+  assert.ok(!car.sample(0).has(1) && car.sample(0).has(2), 'Auto in der Box fehlt, das andere bleibt');
+  assert.ok(!trackSvg(state(1), null, car.sample(0)).includes('data-car="1"'), 'auch nicht im SVG');
+  car.update(state(0), 500);
+  assert.ok(car.sample(500).has(1) && trackSvg(state(0), null, car.sample(500)).includes('data-car="1"'), 'nach der Boxengasse wieder da');
+});
+
+test('pit stops: new stops are detected once, jumps are ignored; timing helpers format German numbers', () => {
+  const stop = (id) => ({ id, code: 'SAI', lap: 20, stop: 2.4, lane: 20.6 });
+  const s = (n) => ({ session: { type: 'race' }, pitStops: Array.from({ length: n }, (_, i) => stop('s' + i)) });
+  assert.deepEqual(detectPitStops(s(1), s(2)).map((p) => p.id), ['s1']);
+  assert.deepEqual(detectPitStops(s(2), s(2)), []);
+  assert.deepEqual(detectPitStops(s(0), s(9)), [], 'Sprung in der Wiederholung: keine Meldungsflut');
+  assert.equal(fmtSecs(2.44), '2,4 s');
+  assert.equal(fmtSecs(null), '–');
+  assert.equal(stationaryTime([{ t: 0, speed: 80 }, { t: 1000, speed: 0 }, { t: 2000, speed: 0 }, { t: 3500, speed: 1 }, { t: 4000, speed: 70 }], 0, 5000), 2.5);
+});
+
+test('race view shows the pit stop table and DNF/STEHT badges', () => {
+  const drivers = [{ num: 1, code: 'NOR', pos: 1, gap: 0, sectors: [null, null, null], sectorCls: ['', '', ''], x: 0, y: 0 }, { num: 2, code: 'STR', pos: 2, status: 'out', sectors: [null, null, null], sectorCls: ['', '', ''] }, { num: 3, code: 'ALO', pos: 3, status: 'stopped', sectors: [null, null, null], sectorCls: ['', '', ''] }];
+  const html = main({ session: { type: 'race', name: 'Race', lap: 20 }, flag: 'green', now: Date.now(), drivers, track: null, pitLoss: { normal: '21.80', sc: '13.81', vsc: '15.77' },
+    pitStops: [{ id: 'a', num: 1, code: 'NOR', lap: 20, lane: 20.6, stop: 2.4, tyre: 'H', color: '#FF8000' }, { id: 'b', num: 3, code: 'ALO', lap: 21, lane: 22.1, stop: null, tyre: 'M' }] }, {});
+  assert.ok(html.includes('Boxenstopps') && html.includes('2,4 s') && html.includes('20,6 s'), 'Tabelle mit Standzeit und Boxengasse');
+  assert.ok(html.includes('Typischer Zeitverlust hier: 21,8 s'), 'Referenz Boxenverlustzeit');
+  assert.ok(html.includes('DNF') && html.includes('STEHT'), 'Status-Badges');
+});
+
+test('2026 overtake mode: release comes from race control, none before any message', () => {
+  assert.equal(overtakeFromControl([]).open, null);
+  const m = (message, min) => ({ message, date: new Date(Date.UTC(2026, 8, 26, 11, min)).toISOString() });
+  assert.equal(overtakeFromControl([m('OVERTAKE DISABLED', 0), m('OVERTAKE ENABLED', 5)]).open, true);
+  assert.equal(overtakeFromControl([m('OVERTAKE ENABLED', 5), m('OVERTAKE DISABLED', 58)]).open, false);
+  assert.equal(overtakeFromControl([m('LAPPED CARS MAY NOW OVERTAKE THE SAFETY CAR: 77', 3)]).open, null);
+});
+
+test('driver photos: only https URLs from the official F1 media server are used', async () => {
+  const { safePhoto } = await import('../js/format.js');
+  assert.ok(safePhoto('https://media.formula1.com/d_driver_fallback_image.png/content/dam/fom-website/drivers/L/LANNOR01_Lando_Norris/lannor01.png.transform/1col/image.png'));
+  for (const bad of ['http://media.formula1.com/x.png', 'https://evil.example/x.png', 'javascript:alert(1)', 'https://media.formula1.com.evil.example/x.png', '', null, undefined]) assert.equal(safePhoto(bad), null, String(bad));
+});
+
+test('retired cars are hidden on the map and announced once', () => {
+  const mk = (st) => ({ session: { type: 'race' }, flag: 'green', now: 0, track: { points: [[0, 0], [100, 0], [100, 100], [0, 100]] }, drivers: [{ num: 1, code: 'NOR', pos: 1, x: 10, y: 0 }, { num: 2, code: 'STR', pos: 2, x: 50, y: 0, status: st }] });
+  const a = mk('stopped'), b = mk('out');
+  assert.ok(trackSvg(a, null).includes('data-car="2"'), 'stehendes Auto bleibt sichtbar');
+  assert.ok(!trackSvg(b, null).includes('data-car="2"'), 'ausgefallenes Auto ist ausgeblendet');
+  assert.ok(trackSvg(b, null).includes('data-car="1"'));
+  assert.deepEqual(detectRetirements(a, b).map((d) => d.code), ['STR']);
+  assert.deepEqual(detectRetirements(b, b), []);
+});
+
+test('country flags: names from OpenF1, Jolpica and the demo all resolve, unknown ones do not', async () => {
+  const { flagUrl, countryOf } = await import('../src/flags.js');
+  for (const c of ['Azerbaijan', 'United States', 'USA', 'UK', 'United Kingdom', 'UAE', 'United Arab Emirates', 'Netherlands', 'Saudi Arabia', 'Monaco', 'Italy', 'Japan', 'Brazil', 'Qatar', 'Mexico', 'Austria', 'Hungary', 'Belgium', 'Singapore', 'Canada', 'Spain', 'Australia', 'China', 'Bahrain', ' united-states '])
+    assert.ok(flagUrl(c), c);
+  assert.equal(flagUrl('Atlantis'), null);
+  assert.equal(flagUrl(''), null);
+  assert.equal(flagUrl(undefined), null);
+  assert.equal(countryOf('Baku · Azerbaijan'), 'Azerbaijan');
+  assert.equal(countryOf('Monza'), 'Monza');
+});
+
+test('loading overlay names the target view and is an accessible status', async () => {
+  const { LoadingOverlay } = await import('../src/components/Loader.jsx');
+  const out = html(<LoadingOverlay label="Qualifying" />);
+  assert.ok(out.includes('Qualifying wird geladen') && out.includes('bereitgemacht'));
+  assert.ok(out.includes('role="status"') && out.includes('aria-live="polite"'));
+  assert.ok(out.includes('lwheel') && out.includes('lcar'), 'Auto ist da');
+});
+
+test('feed: the radio filter shows every radio message, even when it is older than the newest 40 entries', async () => {
+  const { Feed } = await import('../src/components/Feed.jsx');
+  const rc = Array.from({ length: 45 }, (_, i) => ({ id: `rc${i}`, kind: 'rc', t: 1e12 - i * 1000, tag: 'INFO', text: `Meldung ${i}` }));
+  const radio = { id: 'rd1', kind: 'radio', t: 1e12 - 99000, code: 'HAM', tag: 'FUNK', speech: 'Test' };
+  const out = html(<Feed items={[...rc, radio]} drivers={[]} filter="radio" onFilter={() => {}} />);
+  assert.ok(out.includes('HAM'), 'ältere Funknachricht ist sichtbar');
+  assert.ok(!out.includes('Meldung 0'), 'Race Control ist gefiltert');
+});
+
+test('calendar: season bar has one segment per race and marks done and next', async () => {
+  const { Calendar } = await import('../src/components/Calendar.jsx');
+  const mk = (round, status, next = false) => ({ round, meeting: `GP ${round}`, location: 'X', country: 'Italy', circuit: `c${round}`, year: 2026, start: Date.UTC(2026, round, 1), end: Date.UTC(2026, round, 2), status, next });
+  const cal = { year: 2026, races: [mk(1, 'done'), mk(2, 'done'), mk(3, 'upcoming', true), mk(4, 'upcoming')] };
+  const out = html(<Calendar cal={cal} ui={{ year: 2026 }} db={null} />);
+  assert.equal((out.match(/class="sseg /g) || []).length, 4);
+  assert.equal((out.match(/sseg done/g) || []).length, 2);
+  assert.ok(out.includes('sseg upcoming next') && out.includes('2 von 4 Rennen beendet') && out.includes('50 %'));
+});
+
+test('events: overtakes, pit stops and retirements become feed entries and respect the switches', async () => {
+  const { eventsFrom } = await import('../js/events.js');
+  const { Feed } = await import('../src/components/Feed.jsx');
+  const color = new Map([['NOR', '#FF8000'], ['VER', '#3671C6']]);
+  const ev = eventsFrom({ found: [{ by: 'NOR', over: 'VER', pos: 2 }], stops: [{ id: 'a', code: 'ALO', lap: 20, lane: 20.6, stop: 2.4, tyre: 'H', at: 500 }], out: [{ num: 3, code: 'STR' }], now: 1000, color });
+  assert.deepEqual(ev.map((e) => e.kind).sort(), ['dnf', 'overtake', 'pit']);
+  assert.ok(ev.every((e) => e.id && e.t <= 1000));
+  const items = [...ev, { id: 'rc1', kind: 'rc', t: 900, tag: 'INFO', text: 'Meldung A' }, { id: 'rd1', kind: 'radio', t: 800, code: 'HAM', speech: 'x' }];
+  const all = html(<Feed items={items} show={{}} drivers={[]} filter="all" onFilter={() => {}} />);
+  assert.ok(all.includes('überholt') && all.includes('Boxenstopp') && all.includes('2,4 s') && all.includes('ausgefallen') && all.includes('Meldung A'));
+  const off = html(<Feed items={items} show={{ overtake: false, pit: false, radio: false }} drivers={[]} filter="all" onFilter={() => {}} />);
+  assert.ok(!off.includes('überholt') && !off.includes('Standzeit') && off.includes('ausgefallen') && off.includes('Meldung A') && !off.includes('HAM'), 'ausgeschaltete Arten fehlen unter Alle');
+  const act = html(<Feed items={items} show={{ overtake: false }} drivers={[]} filter="actions" onFilter={() => {}} />);
+  assert.ok(act.includes('überholt') && !act.includes('Meldung A'), 'Reiter Aktionen zeigt alle Aktionen, unabhängig von den Schaltern');
+  assert.ok(all.includes('Ereignisse'));
+});
+
+test('race control messages get a German headline, a tone and driver chips; unknown and German texts stay intact', async () => {
+  const { describeRc, sentence } = await import('../js/racecontrol.js');
+  const d = (text, extra = {}) => describeRc({ text, ...extra });
+  assert.deepEqual([d('DOUBLE YELLOW IN TRACK SECTOR 3').title, d('DOUBLE YELLOW IN TRACK SECTOR 3').tone], ['Doppelgelb · Sektor 3', 'yellow']);
+  assert.equal(d('CLEAR IN TRACK SECTOR 3').tone, 'green');
+  assert.equal(d('OVERTAKE DISABLED').title, 'Overtake gesperrt');
+  assert.equal(d('RISK OF RAIN FOR THE F1 RACE IS 10 %').title, 'Regenrisiko 10 %');
+  assert.equal(d('GREEN LIGHT - PIT EXIT OPEN').title, 'Boxenausfahrt offen');
+  assert.equal(d('RECOVERY VEHICLE ON TRACK AT TURN 6').title, 'Bergungsfahrzeug · Kurve 6');
+  const pen = d('FIA STEWARDS: 5 SECOND TIME PENALTY FOR CAR 81 (PIA) - FALSE START - MOVING BEFORE SIGNAL');
+  assert.equal(pen.title, 'Strafe für Frühstart');
+  assert.deepEqual(pen.codes, ['PIA']);
+  assert.ok(pen.detail.includes('(PIA)') && pen.detail.startsWith('5 second time penalty'));
+  const inc = d('INCIDENT INVOLVING CAR 55 (SAI) NOTED - FAILING TO FOLLOW RACE DIRECTORS INSTRUCTIONS');
+  assert.equal(inc.title, 'Vorfall notiert');
+  assert.deepEqual(inc.codes, ['SAI']);
+  assert.ok(inc.detail.startsWith('Incident involving car 55 (SAI) noted'));
+  // Fallback: deutsche Demo-Meldung bleibt wie sie ist
+  const de = d('Regen auf der Strecke. Reifenwahl beachten.', { tag: 'WETTER' });
+  assert.deepEqual([de.title, de.tone], ['Regen auf der Strecke. Reifenwahl beachten.', 'blue']);
+  assert.equal(sentence('Schon normal geschrieben.'), 'Schon normal geschrieben.');
+  assert.equal(d('SOMETHING UNKNOWN HAPPENED').title, 'Something unknown happened');
+});
+
+test('safety car is placed just ahead of the leader on the track', () => {
+  const sq = [[0, 0], [100, 0], [100, 100], [0, 100]];
+  const sc = aheadOf(sq, 50, 0); // Führender mitten auf der unteren Geraden
+  assert.ok(sc.x > 50 && sc.x < 60 && Math.abs(sc.y) < 1e-6, `SC liegt knapp dahinter in Fahrtrichtung (x=${sc.x})`);
+  const wrap = aheadOf(sq, 0, 5); // kurz vor der Ziellinie: läuft über den Umlauf
+  assert.ok(wrap.y < 5 && wrap.x < 5);
+});
+
+test('openf1 client: requests of an abandoned session are dropped without using the rate limit', async () => {
+  let sent = 0;
+  const get = createOpenF1Client({ fetchImpl: async () => { sent++; return { ok: true, json: async () => [1] }; }, minGap: 0, sleep: async () => {}, now: () => 0 });
+  let gone = false;
+  assert.deepEqual(await get('a', () => gone), [1]);
+  gone = true;
+  await assert.rejects(get('b', () => gone), /abgebrochen/);
+  assert.equal(sent, 1, 'die abgebrochene Anfrage wurde nicht gesendet');
 });
