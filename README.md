@@ -44,6 +44,14 @@ Wenn im Rennen ein Auto ein anderes überholt, fährt oben rechts ein kleiner Hi
 
 Die Demo enthält dafür Tagesform und Windschatten (Überholungen im Rennen), ein Training als eigene Session, Boxenstopp-, Schnellste-Runde-, Strafen- und Wetter-Meldungen sowie einen Regen-Knopf.
 
+## Qualität
+
+- **Schriften selbst gehostet** (`fonts/`, OFL, keine Anfragen an Google), `font-display: swap`, Vorab-Laden der wichtigsten Schnitte.
+- **Barrierefrei bedient:** Skip-Link, Landmarken und Überschriftenhierarchie, Tabellen mit Beschriftung, `aria-current` in der Navigation, `aria-live` für Hinweise, sichtbare Fokusrahmen, Timing-Farben immer mit Symbol, `prefers-reduced-motion` wird respektiert.
+- **Responsiv:** Tabellen scrollen seitlich, die Seitenleiste rutscht auf Handybreite unter den Inhalt.
+- **Zustände:** Ladeanzeige, Fehlerleiste bei Verbindungsproblemen, leere Zustände. Alle Texte aus externen Quellen werden escaped, Farben validiert.
+- **CI:** `npm test` läuft bei jedem Push (`.github/workflows/test.yml`).
+
 ## Rennkalender
 
 Tab **Kalender**: alle Rennen einer Saison als Karten mit Runde, Name, Ort, Datum, Streckenlayout und Status (beendet, live, nächstes Rennen). Die Saison wählst du im Dropdown (ab 2023, so weit reichen die OpenF1-Daten). Ein Klick auf ein Rennen öffnet es: bei OpenF1 als Wiederholung bzw. Live-Ansicht, bei einem zukünftigen Rennen als Vorschau mit Countdown. Im Demo-Modus zeigt der Kalender die Strecken des Jahres mit erfundenen Terminen.

@@ -15,7 +15,7 @@ export function createFeed({ proxy = null, getKey = () => null } = {}) {
     const st = tstate.get(id);
     if (!st) return '';
     if (st.status === 'loading') return `<p class="tr muted" role="status">${st.pct != null ? `Modell wird geladen … ${st.pct} %` : 'Transkribiere …'}</p>`;
-    if (st.status === 'error') return `<p class="tr err" role="alert">⚠ ${esc(st.error)}</p>`;
+    if (st.status === 'error') return `<p class="tr err" role="alert">${esc(st.error)}</p>`;
     return `<p class="tr"><span class="label">Transkript</span><br>${esc(st.text)}</p>`;
   }
 
@@ -26,12 +26,13 @@ export function createFeed({ proxy = null, getKey = () => null } = {}) {
   function create(m) {
     const node = document.createElement('div');
     node.dataset.id = m.id;
+    node.dataset.kind = m.kind;
     if (m.kind === 'radio') {
       node.className = 'msg';
       const opts = enginesFor(m).map((e) => `<option value="${e.id}">${esc(e.label)}</option>`).join('');
       const player = m.url
         ? `<audio controls preload="none" src="${esc(m.url)}"></audio>`
-        : m.speech ? '<button type="button" class="speak" data-speak>▶ Abspielen</button>' : '';
+        : m.speech ? '<button type="button" class="speak" data-speak>Abspielen</button>' : '';
       node.innerHTML = `<div class="meta"><span class="who">${esc(m.code || '—')}</span><span class="t mono">${fmtTime(m.t)}</span><span class="tag">${esc(m.tag || 'FUNK')}</span></div>${m.text ? `<p>${esc(m.text)}</p>` : ''}${player}${
         m.url || m.speech ? `<select class="trsel" aria-label="Funkspruch transkribieren"><option value="">Transkribieren …</option>${opts}</select>` : ''}<div class="trslot"></div>`;
       node.addEventListener('change', (e) => {

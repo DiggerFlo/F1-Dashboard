@@ -219,20 +219,30 @@ export function trackSvg(state, selNum, pos = null) {
   return out.join('');
 }
 
-/** Telemetrie-Verlauf (Geschwindigkeit, Gas, Bremse) aus einer Historie [{speed,throttle,brake}]. */
+/** Telemetrie-Verlauf in drei Spuren (Geschwindigkeit, Gas, Bremse) aus einer Historie [{speed,throttle,brake}]. */
 export function tracesSvg(hist, ref) {
-  const W = 760, H = 220, N = 80;
-  const line = (arr, fn) => arr.map((s, i) => `${((i * W) / (N - 1)).toFixed(1)},${fn(s).toFixed(1)}`).join(' ');
-  const h = hist.slice(-N);
+  const W = 560, H = 288, N = 80, L = 58, R = 8;
+  const X = (i) => L + (i * (W - L - R)) / (N - 1);
+  const h = hist.slice(-N), off = N - h.length; // neue Daten füllen von rechts
+  const sy = (v) => 168 - (Math.min(350, Math.max(0, v)) / 350) * 150;
+  const speed = (arr, o = 0) => arr.map((r, i) => `${X(i + o).toFixed(1)},${sy(r.speed).toFixed(1)}`).join(' ');
   let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Verlauf von Geschwindigkeit, Gas und Bremse">`;
-  for (const y of [30, 70, 110, 150, 190]) s += `<line x1="0" x2="${W}" y1="${y}" y2="${y}" stroke="#2e2e37"/>`;
-  if (ref && ref.length > 1) s += `<polyline points="${line(ref.slice(-N), (r) => 130 - r.speed * 0.38)}" fill="none" stroke="#b14bff" stroke-width="2"/>`;
+  for (const v of [0, 100, 200, 300]) s += `<line x1="${L}" x2="${W - R}" y1="${sy(v)}" y2="${sy(v)}" stroke="#2e2e37"/><text x="${L - 8}" y="${sy(v) + 3}" text-anchor="end" font-family="JetBrains Mono" font-size="12" fill="#9a9aa6">${v}</text>`;
+  s += `<text x="${L - 8}" y="10" text-anchor="end" font-family="Inter" font-size="11" fill="#9a9aa6">km/h</text>`;
+  s += `<text x="${L - 8}" y="206" text-anchor="end" font-family="Inter" font-size="12" fill="#9a9aa6">Gas</text><rect x="${L}" y="186" width="${W - L - R}" height="30" fill="#0b0b0e" stroke="#2e2e37"/>`;
+  s += `<text x="${L - 8}" y="262" text-anchor="end" font-family="Inter" font-size="12" fill="#9a9aa6">Bremse</text><rect x="${L}" y="242" width="${W - L - R}" height="30" fill="#0b0b0e" stroke="#2e2e37"/>`;
+  if (ref && ref.length > 1) { const r = ref.slice(-N); s += `<polyline points="${speed(r, N - r.length)}" fill="none" stroke="#b14bff" stroke-width="2" stroke-linejoin="round"/>`; }
   if (h.length > 1) {
-    s += `<polyline points="${line(h, (r) => 130 - r.speed * 0.38)}" fill="none" stroke="#f5f5f3" stroke-width="2"/>`;
-    s += `<polyline points="${line(h, (r) => 210 - r.throttle * 0.5)}" fill="none" stroke="#9a9aa6" stroke-width="1.5"/>`;
-    s += `<polyline points="${line(h, (r) => 210 - r.brake * 0.5)}" fill="none" stroke="#f5f5f3" stroke-width="1.5" stroke-dasharray="4 3"/>`;
+    s += `<polyline points="${speed(h, off)}" fill="none" stroke="#f5f5f3" stroke-width="2" stroke-linejoin="round"/>`;
+    const area = (arr, y0, hgt, key) => `${X(off).toFixed(1)},${y0 + hgt} ` + arr.map((r, i) => `${X(i + off).toFixed(1)},${(y0 + hgt - (Math.min(100, r[key] || 0) / 100) * hgt).toFixed(1)}`).join(' ') + ` ${X(N - 1).toFixed(1)},${y0 + hgt}`;
+    s += `<polygon points="${area(h, 186, 30, 'throttle')}" fill="#9a9aa6" fill-opacity=".45" stroke="#9a9aa6" stroke-width="1"/>`;
+    s += `<polygon points="${area(h, 242, 30, 'brake')}" fill="#f5f5f3" fill-opacity=".55" stroke="#f5f5f3" stroke-width="1"/>`;
+    const last = h[h.length - 1];
+    s += `<circle cx="${X(N - 1)}" cy="${sy(last.speed)}" r="4" fill="#f5f5f3" stroke="#17171c" stroke-width="2"/>`;
+  } else {
+    s += `<text x="${(W + L) / 2}" y="100" text-anchor="middle" font-family="Inter" font-size="13" fill="#9a9aa6">Messwerte werden gesammelt …</text>`;
   }
-  s += `<text x="4" y="14" font-family="JetBrains Mono" font-size="10" fill="#9a9aa6">320 km/h</text><text x="${W - 4}" y="214" text-anchor="end" font-family="JetBrains Mono" font-size="10" fill="#9a9aa6">jetzt</text></svg>`;
+  s += `<text x="${L}" y="${H - 2}" font-family="Inter" font-size="11" fill="#9a9aa6">älter</text><text x="${W - R}" y="${H - 2}" text-anchor="end" font-family="Inter" font-size="11" fill="#9a9aa6">jetzt</text></svg>`;
   return s;
 }
 

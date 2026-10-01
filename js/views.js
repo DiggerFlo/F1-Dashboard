@@ -20,21 +20,23 @@ const tyre = (c) => {
 const codeCell = (d) => `<span class="tc" style="background:${safeColor(d.color) || 'var(--line)'}" aria-hidden="true"></span><span class="code" title="${esc([d.name, d.team].filter(Boolean).join(' · '))}">${esc(d.code)}</span>`;
 const sec = (v, c) => (c ? `<span class="${c}">${fmtSector(v)}</span>` : fmtSector(v));
 const bar = (v, cls = '') => `<span class="bar ${cls}"><i style="width:${Math.round(v || 0)}%"></i></span>`;
-const kpi = (l, v, d, c = '') => `<div class="card kpi"><span class="label">${esc(l)}</span><span class="v mono">${esc(v)}</span><span class="d mono ${c}">${esc(d)}</span></div>`;
+const kpi = (l, v, d, c = '') => `<div class="card kpi"><span class="label">${esc(l)}</span><span class="v">${esc(v)}</span><span class="d ${c}">${esc(d)}</span></div>`;
+const WARN = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5 15 14H1L8 1.5Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M8 6.5v3.5M8 12v.01" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
+const MARK = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3h9a6 6 0 0 1 0 12H9v6H4V3Zm5 4v4h4a2 2 0 0 0 0-4H9Z" fill="currentColor" fill-rule="evenodd"/><rect x="15" y="17" width="5" height="4" fill="#e8112d"/></svg>';
 
 function topbar(state, ui) {
   const type = ui.view === 'calendar' ? 'calendar' : state.session.type;
-  const tabs = TABS.map(([k, n]) => `<button class="tab${k === type ? ' on' : ''}" data-action="tab" data-type="${k}">${n}</button>`).join('');
+  const tabs = TABS.map(([k, n]) => `<button type="button" class="tab${k === type ? ' on' : ''}" data-action="tab" data-type="${k}"${k === type ? ' aria-current="page"' : ''}>${n}</button>`).join('');
   const f = state.flag;
   let dot = 'g', txt = 'Live';
-  if (type === 'upcoming') { dot = ''; txt = 'Nächste Session'; }
+  if (state.session.type === 'upcoming') { dot = ''; txt = 'Nächste Session'; }
   else if (state.session.phase === 'replay') { dot = ''; txt = 'Wiederholung'; }
   else if (f === 'red') { dot = 'y'; txt = 'Unterbrochen'; }
   else if (f === 'sc' || f === 'vsc' || f === 'yellow') { dot = 'y'; txt = 'Live · Neutralisiert'; }
   else if (f === 'chequered') { dot = ''; txt = 'Beendet'; }
-  else if (type === 'race') { dot = 'red'; }
-  const lap = state.session.lap ? ` · Runde ${state.session.lap}${state.session.totalLaps ? '/' + state.session.totalLaps : ''}` : '';
-  return `<header class="top"><div class="brand disp">Pitwall</div><nav class="tabs" aria-label="Session">${tabs}</nav><button type="button" class="hint" data-action="toggle-toasts" aria-pressed="${ui.toasts}" title="Hinweise bei Überholmanövern">Überholungen ${ui.toasts ? 'an' : 'aus'}</button><div class="live"><span class="dot ${dot}"></span>${esc(txt + (type === 'race' ? lap : ''))}</div></header>`;
+  else if (state.session.type === 'race') { dot = 'red'; }
+  const lap = state.session.type === 'race' && state.session.lap ? ` · Runde ${state.session.lap}${state.session.totalLaps ? '/' + state.session.totalLaps : ''}` : '';
+  return `<header class="top"><a class="brand" href="./" aria-label="Pitwall, Startseite">${MARK}<span>Pitwall</span></a><nav class="tabs" aria-label="Ansicht">${tabs}</nav><div class="top-r"><button type="button" class="switch" data-action="toggle-toasts" aria-pressed="${ui.toasts}" title="Hinweise bei Überholmanövern"><i aria-hidden="true"></i><span>Überholungen</span></button><div class="status"><span class="dot ${dot}"></span>${esc(txt + lap)}</div></div></header>`;
 }
 
 function banner(state) {
@@ -51,12 +53,12 @@ function banner(state) {
     case 'red':
       return `<div class="banner rf" role="status"><h2 class="disp">Rote Flagge</h2><span class="sub">Session unterbrochen${since}</span><span class="sp"></span><span class="bx mono">${lapTxt}</span></div>`;
     case 'chequered':
-      return `<div class="banner ok" role="status"><span class="dot"></span><span class="label" style="color:#f5f5f3">Zielflagge · Session beendet</span></div>`;
+      return `<div class="banner ok" role="status"><span class="dot"></span><span class="label strong">Zielflagge · Session beendet</span></div>`;
     default: {
       const w = state.weather;
       const wtxt = w ? `Luft ${w.air} °C · Strecke ${w.track} °C${w.rain ? ' · Regen' : ' · trocken'}` : '';
       const left = (s.type === 'quali' || s.type === 'practice') && s.remaining != null ? `Grüne Flagge · Verbleibend ${fmtClock(s.remaining)}` : s.type === 'upcoming' ? 'Nächste Session' : 'Strecke frei · Grüne Flagge';
-      return `<div class="banner ok" role="status"><span class="dot ${s.type === 'upcoming' ? '' : 'g'}"></span><span class="label" style="color:#f5f5f3">${esc(left)}</span><span class="sp"></span><span class="label">${esc(wtxt)}</span></div>`;
+      return `<div class="banner ok" role="status"><span class="dot ${s.type === 'upcoming' ? '' : 'g'}"></span><span class="label strong">${esc(left)}</span><span class="sp"></span><span class="label">${esc(wtxt)}</span></div>`;
     }
   }
 }
@@ -105,23 +107,23 @@ function timingTable(state, sel) {
   const rows = state.drivers;
   if (!rows.length) return '<div class="empty">Keine Fahrerdaten verfügbar.</div>';
   if (s.type === 'quali' || s.type === 'practice') {
-    const head = '<tr><th>Pos</th><th>Fahrer</th><th>Reifen</th><th class="r">Beste Zeit</th><th class="r">Abstand</th><th class="r">Letzte Runde</th><th class="r">S1</th><th class="r">S2</th><th class="r">S3</th><th>Status</th></tr>';
+    const head = '<tr><th scope="col">Pos</th><th>Fahrer</th><th>Reifen</th><th class="r">Beste Zeit</th><th class="r">Abstand</th><th class="r">Letzte Runde</th><th class="r">S1</th><th class="r">S2</th><th class="r">S3</th><th>Status</th></tr>';
     const pole = rows.find((x) => x.best != null)?.best;
     const body = rows.map((d, i) => {
       const cls = [i === 0 ? 'lead' : '', d.num === sel ? 'sel' : '', s.cutoff && i === s.cutoff - 1 ? 'cut' : ''].join(' ').trim();
       const best = d.best != null ? (i === 0 ? `<span class="p">${fmtLap(d.best)}</span>` : fmtLap(d.best)) : '—';
-      return `<tr class="${cls}" data-num="${d.num}" tabindex="0"><td class="pos">${d.pos}</td><td>${codeCell(d)}</td><td>${tyre(d.tyre)}</td><td class="mono r">${best}</td><td class="mono r">${d.best != null && i ? fmtGap(d.best - pole) : i === 0 ? 'Pole' : '—'}</td><td class="mono r">${fmtLap(d.last)}</td>${[0, 1, 2].map((k) => `<td class="mono r">${sec(d.sectors?.[k], d.sectorCls?.[k])}</td>`).join('')}<td>${d.onTrack ? '<span class="drs">PUSH</span>' : '<span class="drs off">BOX</span>'}</td></tr>`;
+      return `<tr class="${cls}" data-num="${d.num}" tabindex="0"><td class="pos">${d.pos}</td><td>${codeCell(d)}</td><td>${tyre(d.tyre)}</td><td class="mono r">${best}</td><td class="mono r">${d.best != null && i ? fmtGap(d.best - pole) : i === 0 ? 'Pole' : '—'}</td><td class="mono r">${fmtLap(d.last)}</td>${[0, 1, 2].map((k) => `<td class="mono r">${sec(d.sectors?.[k], d.sectorCls?.[k])}</td>`).join('')}<td>${d.onTrack ? '<span class="badge drs">PUSH</span>' : '<span class="badge">BOX</span>'}</td></tr>`;
     }).join('');
-    return `<table><thead>${head}</thead><tbody>${body}</tbody></table>`;
+    return `<table><caption class="sr-only">${s.type === 'quali' ? 'Qualifying-Ergebnis' : 'Trainingsergebnis'}</caption><thead>${head}</thead><tbody>${body}</tbody></table>`;
   }
-  const head = '<tr><th>Pos</th><th>Fahrer</th><th>Reifen</th><th class="r">Abstand</th><th class="r">Intervall</th><th class="r">Letzte Runde</th><th class="r">S1</th><th class="r">S2</th><th class="r">S3</th><th class="r">km/h</th><th>Gas / Bremse</th><th class="r">Gang</th><th>DRS</th><th>Status</th></tr>';
+  const head = '<tr><th scope="col">Pos</th><th>Fahrer</th><th>Reifen</th><th class="r">Abstand</th><th class="r">Intervall</th><th class="r">Letzte Runde</th><th class="r">S1</th><th class="r">S2</th><th class="r">S3</th><th class="r">km/h</th><th>Gas / Bremse</th><th class="r">Gang</th><th>DRS</th><th>Status</th></tr>';
   const frozen = state.flag === 'red';
   const body = rows.map((d, i) => {
     const cls = [i === 0 ? 'lead' : '', d.num === sel ? 'sel' : ''].join(' ').trim();
-    const status = d.pit ? '<span class="pit">PIT</span>' : frozen ? '<span class="pit">BOX</span>' : '';
-    return `<tr class="${cls}" data-num="${d.num}" tabindex="0"><td class="pos">${d.pos}</td><td>${codeCell(d)}</td><td>${tyre(d.tyre)}</td><td class="mono r">${fmtGap(d.gap, i === 0)}</td><td class="mono r">${i === 0 ? '—' : fmtGap(d.interval)}</td><td class="mono r">${fmtLap(d.last)}</td>${[0, 1, 2].map((k) => `<td class="mono r">${sec(d.sectors?.[k], d.sectorCls?.[k])}</td>`).join('')}<td class="mono r">${d.speed != null ? Math.round(d.speed) : '—'}</td><td>${bar(d.throttle)} ${bar(d.brake, 'b')}</td><td class="mono r">${d.gear ?? '—'}</td><td>${d.drs ? '<span class="drs">DRS</span>' : '<span class="drs off">—</span>'}</td><td>${status}</td></tr>`;
+    const status = d.pit ? '<span class="badge pit">PIT</span>' : frozen ? '<span class="badge pit">BOX</span>' : '';
+    return `<tr class="${cls}" data-num="${d.num}" tabindex="0"><td class="pos">${d.pos}</td><td>${codeCell(d)}</td><td>${tyre(d.tyre)}</td><td class="mono r">${fmtGap(d.gap, i === 0)}</td><td class="mono r">${i === 0 ? '—' : fmtGap(d.interval)}</td><td class="mono r">${fmtLap(d.last)}</td>${[0, 1, 2].map((k) => `<td class="mono r">${sec(d.sectors?.[k], d.sectorCls?.[k])}</td>`).join('')}<td class="mono r">${d.speed != null ? Math.round(d.speed) : '—'}</td><td>${bar(d.throttle)} ${bar(d.brake, 'b')}</td><td class="mono r">${d.gear ?? '—'}</td><td>${d.drs ? '<span class="badge drs">DRS</span>' : '<span class="badge">—</span>'}</td><td>${status}</td></tr>`;
   }).join('');
-  return `<table><thead>${head}</thead><tbody>${body}</tbody></table>`;
+  return `<table><caption class="sr-only">Live-Timing aller Fahrer</caption><thead>${head}</thead><tbody>${body}</tbody></table>`;
 }
 
 function detail(state, sel, hist, ref) {
@@ -129,41 +131,60 @@ function detail(state, sel, hist, ref) {
   if (!d) return '';
   const h = hist.get(d.num) || [];
   const f = state.flag;
-  const legendRef = state.session.type === 'quali' ? '<span><i style="background:#b14bff"></i>Pole-Runde</span>' : '';
-  return `<div class="sec"><div class="sech"><h3 class="disp">Telemetrie · ${esc(d.code)} · P${d.pos}</h3><span class="label">${d.team ? `<span class="tc" style="background:${safeColor(d.color) || 'var(--line)'}"></span>${esc(d.team)} · ` : ''}Letzte Samples</span></div><div class="two"><div class="card traces">${tracesSvg(h, state.session.type === 'quali' ? ref : null)}<div class="legend"><span><i></i>Geschwindigkeit</span><span><i style="background:#9a9aa6;height:2px"></i>Gas</span><span><i style="background:repeating-linear-gradient(90deg,#f5f5f3 0 4px,transparent 4px 7px);height:2px"></i>Bremse</span>${legendRef}</div></div><div class="kpis">${
-    kpi('Geschwindigkeit', d.speed != null ? String(Math.round(d.speed)) : '—', 'km/h', 'muted')}${
-    kpi('Gang / U/min', `${d.gear ?? '—'} · ${d.rpm != null ? (d.rpm / 1000).toFixed(1) + 'k' : '—'}`, 'Bereich 8.0–12.5k', f === 'sc' ? 'y' : 'muted')}${
-    kpi('Gas / Bremse', `${Math.round(d.throttle || 0)}% / ${Math.round(d.brake || 0)}%`, d.brake > 0 ? 'bremst' : 'Gas', 'muted')}${
-    kpi('DRS', d.drs ? 'Offen' : 'Zu', f === 'sc' || f === 'red' ? 'Gesperrt' : '', d.drs ? 'g' : 'muted')}</div></div></div>`;
+  const isQ = state.session.type === 'quali';
+  const legendRef = isQ ? '<span><i style="background:var(--tp)"></i>Pole-Runde</span>' : '';
+  const team = d.team ? `<span class="tc" style="background:${safeColor(d.color) || 'var(--line)'}"></span>${esc(d.team)}` : 'Letzte Messwerte';
+  return `<section class="sec" aria-label="Telemetrie ${esc(d.code)}"><div class="sech"><h2>Telemetrie · ${esc(d.code)} · P${d.pos}</h2><span class="meta">${team}</span></div><div class="two"><div class="card traces">${tracesSvg(h, isQ ? ref : null)}<div class="legend"><span><i></i>Geschwindigkeit</span><span><i style="background:var(--ink-muted)"></i>Gas</span><span><i style="background:repeating-linear-gradient(90deg,var(--ink) 0 4px,transparent 4px 7px)"></i>Bremse</span>${legendRef}</div></div><div class="kpis two-col">${
+    kpi('Geschwindigkeit', d.speed != null ? String(Math.round(d.speed)) : '—', 'km/h', '')}${
+    kpi('Gang · U/min', `${d.gear ?? '—'} · ${d.rpm != null ? (d.rpm / 1000).toFixed(1) + 'k' : '—'}`, 'Bereich 8.0–12.5k', f === 'sc' ? 'y' : '')}${
+    kpi('Gas · Bremse', `${Math.round(d.throttle || 0)}% · ${Math.round(d.brake || 0)}%`, d.brake > 0 ? 'bremst' : 'Gas', '')}${
+    kpi('DRS', d.drs ? 'Offen' : 'Zu', f === 'sc' || f === 'red' ? 'Gesperrt' : '', d.drs ? 'g' : '')}</div></div></section>`;
 }
 
 function upcomingBody(state) {
   const u = state.upcoming || {};
   const cd = splitCountdown((u.startsAt - state.now) / 1000);
-  const cell = (v, l) => `<div><span class="v disp mono">${String(v).padStart(2, '0')}</span><span class="label">${l}</span></div>`;
-  const facts = (u.facts || []).map(([l, v]) => `<div><span class="label">${esc(l)}</span><div class="mono" style="font-size:18px;font-weight:700">${esc(v)}</div></div>`).join('');
-  const hero = `<div class="card hl"><span class="label">${esc(u.nextLabel || 'Nächste Session')}</span><h2 class="disp big">${esc(u.meeting || '—')}</h2><span class="muted">${esc(u.circuit || '')}</span><div class="cd" style="margin-top:12px">${cell(cd.d, 'Tage')}${cell(cd.h, 'Std')}${cell(cd.m, 'Min')}${cell(cd.s, 'Sek')}</div><div style="margin-top:12px" class="two">${facts}</div></div>`;
+  const cell = (v, l) => `<div><span class="v">${String(v).padStart(2, '0')}</span><span class="label">${l}</span></div>`;
+  const facts = (u.facts || []).map(([l, v]) => `<div><span class="label">${esc(l)}</span><div class="mono" style="font-size:16px;font-weight:700">${esc(v)}</div></div>`).join('');
+  const hero = `<div class="card hl"><span class="label">${esc(u.nextLabel || 'Nächste Session')}</span><h2 class="big">${esc(u.meeting || '—')}</h2><span class="muted">${esc(u.circuit || '')}</span><div class="cd" style="margin-top:var(--space-3)">${cell(cd.d, 'Tage')}${cell(cd.h, 'Std')}${cell(cd.m, 'Min')}${cell(cd.s, 'Sek')}</div><div style="margin-top:var(--space-3)" class="two">${facts}</div></div>`;
   const rows = (arr) => (arr || []).map(([a, b]) => `<div class="row"><span>${esc(a)}</span><span class="mono">${esc(b)}</span></div>`).join('');
   const stand = (u.standings || []).map((r, i) => `<tr class="${i === 0 ? 'lead' : ''}"><td class="pos">${i + 1}</td><td><span class="code">${esc(r.code)}</span></td><td class="mono r">${r.points}</td><td class="mono r">${r.wins}</td></tr>`).join('');
-  return `<div class="hero"><div class="card map"><div class="sech"><span class="label">Streckenlayout</span><span class="label">${esc(u.circuit || '')}</span></div>${trackSvg(state, null)}</div>${hero}</div>
-  <div class="two"><div class="sec"><div class="sech"><h3 class="disp">Zeitplan</h3><span class="label">Ortszeit</span></div><div class="card">${rows(u.schedule)}</div></div><div class="sec"><div class="sech"><h3 class="disp">Wetter</h3><span class="label">Prognose</span></div><div class="card">${rows(u.weather)}</div></div></div>
-  ${stand ? `<div class="sec"><div class="sech"><h3 class="disp">Fahrerwertung</h3><span class="label">Top 10</span></div><div class="tw"><table style="min-width:0"><thead><tr><th>Pos</th><th>Fahrer</th><th class="r">Punkte</th><th class="r">Siege</th></tr></thead><tbody>${stand}</tbody></table></div></div>` : ''}`;
+  return `<div class="hero"><div class="card map"><div class="cap"><span class="label">Streckenlayout</span><span class="label">${esc(u.circuit || '')}</span></div>${trackSvg(state, null)}</div>${hero}</div>
+  <div class="two"><div class="sec"><div class="sech"><h2>Zeitplan</h2><span class="meta">Ortszeit</span></div><div class="card">${rows(u.schedule)}</div></div><div class="sec"><div class="sech"><h2>Wetter</h2><span class="meta">Prognose</span></div><div class="card">${rows(u.weather)}</div></div></div>
+  ${stand ? `<div class="sec"><div class="sech"><h2>Fahrerwertung</h2><span class="meta">Top 10</span></div><div class="tw"><table style="min-width:0"><caption class="sr-only">Fahrerwertung</caption><thead><tr><th>Pos</th><th>Fahrer</th><th class="r">Punkte</th><th class="r">Siege</th></tr></thead><tbody>${stand}</tbody></table></div></div>` : ''}`;
 }
 
-export function renderSideHead(state) {
+const FILTERS = [['all', 'Alle'], ['radio', 'Funk'], ['rc', 'Race Control']];
+
+export function renderSideHead(state, ui) {
   const sub = state.session.type === 'upcoming' ? 'Offline' : state.flag === 'sc' ? 'Safety Car' : state.flag === 'red' ? 'Unterbrochen' : 'Live';
-  return `<h3 class="disp">Funk</h3><span class="label">${sub}</span>`;
+  const seg = FILTERS.map(([k, n]) => `<button type="button" data-action="feed-filter" data-v="${k}" aria-pressed="${ui.filter === k}">${n}</button>`).join('');
+  return `<div class="sideh"><h2>Funk</h2><span class="label">${sub}</span></div><div class="seg" role="group" aria-label="Meldungen filtern">${seg}</div>`;
 }
 
 function toolbar(ui) {
   if (!ui.demo) return '';
-  const b = (a, t) => `<button data-action="${a}">${t}</button>`;
-  return `<div class="toolbar" role="toolbar" aria-label="Demo-Steuerung"><span class="label">Demo</span>${b('ev-green', 'Grün')}${b('ev-yellow', 'Gelb')}${b('ev-sc', 'Safety Car')}${b('ev-vsc', 'VSC')}${b('ev-red', 'Rote Flagge')}${b('ev-rain', 'Regen')}<span class="label" style="margin-left:auto">Simulierte Daten</span></div>`;
+  const b = (a, t) => `<button type="button" class="btn" data-action="${a}">${t}</button>`;
+  return `<div class="demo" role="toolbar" aria-label="Demo-Steuerung"><span class="label">Demo-Ereignis</span>${b('ev-green', 'Grün')}${b('ev-yellow', 'Gelb')}${b('ev-sc', 'Safety Car')}${b('ev-vsc', 'VSC')}${b('ev-red', 'Rote Flagge')}${b('ev-rain', 'Regen')}<span class="label" style="margin-left:auto">Simulierte Daten</span></div>`;
 }
 
-/** Kopfzeile, Banner und Hauptbereich. Die Seitenleiste lebt dauerhaft in main.js (Audio/Dropdowns). */
+function problem(state) {
+  return state.problem ? `<div class="problem" role="alert">${WARN}<span>${esc(state.problem)}</span></div>` : '';
+}
+
+/** Kopfzeile, Hinweise, Banner. Die Seitenleiste lebt dauerhaft in main.js (Audio/Dropdowns). */
 export function renderChrome(state, ui) {
-  return `${topbar(state, ui)}${toolbar(ui)}${ui.view === 'calendar' ? '' : banner(state)}`;
+  return `<h1 class="sr-only">Pitwall – F1 Live-Dashboard</h1>${topbar(state, ui)}${toolbar(ui)}${problem(state)}${ui.view === 'calendar' ? '' : banner(state)}`;
+}
+
+function top5(state, sel) {
+  const s = state.session;
+  const timed = s.type === 'quali' || s.type === 'practice';
+  const rows = state.drivers.slice(0, 8).map((d, i) => {
+    const val = timed ? (d.best != null ? (i === 0 ? `<span class="p">${fmtLap(d.best)}</span>` : fmtLap(d.best)) : '—') : i === 0 ? 'Leader' : fmtGap(d.interval);
+    return `<button type="button" data-action="pick" data-num="${d.num}" class="${d.num === sel ? 'on' : ''}"><span class="p1">${d.pos}</span><span class="nm">${codeCell(d)}${d.team ? `<small>${esc(d.team)}</small>` : ''}</span>${tyre(d.tyre)}<span class="val">${val}</span></button>`;
+  }).join('');
+  return `<div class="card top5"><div class="head"><span class="label">${timed ? 'Schnellste Zeiten' : 'Spitzengruppe'}</span><span class="label">${timed ? 'Beste Zeit' : 'Intervall'}</span></div>${rows}</div>`;
 }
 
 export function renderMain(state, ui, hist, ref) {
@@ -171,8 +192,9 @@ export function renderMain(state, ui, hist, ref) {
   if (t === 'upcoming') return upcomingBody(state);
   const label = t === 'quali' ? 'Qualifying' : t === 'practice' ? 'Training' : 'Rennen';
   const ttl = state.flag === 'sc' ? 'Live-Timing · Safety Car' : state.flag === 'red' ? 'Aufstellung beim Restart' : t === 'quali' ? 'Qualifying-Ergebnis' : t === 'practice' ? 'Trainingsergebnis' : 'Live-Timing';
-  return `<div class="hero"><div class="card map"><div class="sech"><span class="label">Streckenlayout · ${label}${state.session.lap ? ' · Runde ' + state.session.lap : ''}</span><span class="label">${esc(state.session.circuit || '')}</span></div>${trackSvg(state, ui.sel, ui.pos)}</div><div class="kpis">${kpisFor(state)}</div></div>
-    <div class="sec"><div class="sech"><h3 class="disp">${ttl}</h3><span class="label">Zeile anklicken für Telemetrie</span></div><div class="tw">${timingTable(state, ui.sel)}</div></div>
+  return `<div class="kpis">${kpisFor(state)}</div>
+    <div class="hero"><div class="card map"><div class="cap"><span class="label">${label}${state.session.lap ? ' · Runde ' + state.session.lap : ''}</span><span class="label">${esc(state.session.circuit || '')}</span></div>${trackSvg(state, ui.sel, ui.pos)}</div>${top5(state, ui.sel)}</div>
+    <section class="sec" aria-label="${ttl}"><div class="sech"><h2>${ttl}</h2><span class="meta">Zeile wählen für Telemetrie</span></div><div class="tw">${timingTable(state, ui.sel)}</div></section>
     ${detail(state, ui.sel, hist, ref)}`;
 }
 
@@ -193,9 +215,9 @@ const STATUS = { done: ['Beendet', ''], live: ['Live', 'live'], upcoming: ['Gepl
 export function renderCalendar(cal, ui, db) {
   const years = yearsFor();
   const opts = years.map((y) => `<option value="${y}"${y === ui.year ? ' selected' : ''}>${y}</option>`).join('');
-  const head = `<div class="sech"><h3 class="disp">Rennkalender</h3><label class="label" style="display:flex;gap:8px;align-items:center">Saison <select class="trsel" data-action="year" aria-label="Saison wählen">${opts}</select></label></div>`;
+  const head = `<div class="sech"><h2>Rennkalender</h2><label class="label yearsel">Saison <select class="trsel" data-action="year" aria-label="Saison wählen">${opts}</select></label></div>`;
   if (!cal) return `<div class="sec">${head}<div class="empty">Kalender wird geladen …</div></div>`;
-  if (cal.error) return `<div class="sec">${head}<div class="empty" role="alert">⚠ ${esc(cal.error)}</div></div>`;
+  if (cal.error) return `<div class="sec">${head}<div class="empty err" role="alert">${WARN.replace('<svg ', '<svg width="16" height="16" ')}<span>${esc(cal.error)}</span></div></div>`;
   if (!cal.races.length) return `<div class="sec">${head}<div class="empty">Keine Rennen für ${cal.year} gefunden.</div></div>`;
   const done = cal.races.filter((r) => r.status === 'done').length;
   const fmt = new Intl.DateTimeFormat('de-CH', { weekday: 'short', day: '2-digit', month: 'short' });
@@ -208,6 +230,6 @@ export function renderCalendar(cal, ui, db) {
       <span class="rt"><strong class="title">${esc(r.meeting)}</strong><span class="muted">${esc([r.location, r.country].filter(Boolean).join(' · '))}</span><span class="mono">${esc(fmt.format(r.start))}</span><span class="chips">${nextTag}${live}</span></span>
       <span class="rm">${miniFor(db, r)}</span></button>`;
   }).join('');
-  const note = cal.demo ? '<p class="fine" style="padding:0">Demo: Strecken des Jahres mit erfundenen Terminen, alle 14 Tage ab Mitte März. Echte Termine: ?source=openf1</p>' : '';
+  const note = cal.demo ? '<p class="meta muted">Demo: Strecken des Jahres mit erfundenen Terminen, alle 14 Tage ab Mitte März. Echte Termine: ?source=openf1</p>' : '';
   return `<div class="sec">${head}<p class="muted">${cal.races.length} Rennen · ${done} beendet</p><div class="cal">${cards}</div>${note}</div>`;
 }

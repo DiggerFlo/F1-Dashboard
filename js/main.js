@@ -8,7 +8,10 @@ import { createOpenF1Source } from './sources/openf1.js';
 
 const params = new URLSearchParams(location.search);
 const root = document.getElementById('app');
-root.innerHTML = '<div id="chrome"></div><div class="shell"><main class="main" id="mainc"></main><aside class="side"><div class="sideh" id="sidehead"></div><div id="feedslot"></div><div class="fine" id="sidefoot"></div></aside></div>';
+root.innerHTML = `<a class="skip" href="#mainc">Zum Inhalt springen</a><div id="chrome"></div>
+<div class="shell"><main class="main" id="mainc" tabindex="-1" aria-busy="true"><div class="kpis"><div class="skel" style="height:92px"></div><div class="skel" style="height:92px"></div><div class="skel" style="height:92px"></div><div class="skel" style="height:92px"></div></div><div class="skel" style="height:360px"></div><div class="skel" style="height:420px"></div></main>
+<aside class="side" aria-label="Funk und Race Control"><div id="sidehead"></div><div id="feedslot"></div><div class="sidefoot" id="sidefoot"></div></aside></div>
+<footer class="foot"><span>Inoffizielles Fan-Projekt, nicht mit der Formula 1 oder einem Team verbunden.</span><span>Daten: <a href="https://openf1.org" target="_blank" rel="noopener">OpenF1</a></span><span>Streckenlayouts: <a href="https://github.com/julesr0y/f1-circuits-svg" target="_blank" rel="noopener">julesr0y/f1-circuits-svg</a> (CC BY 4.0)</span></footer>`;
 const $ = (id) => document.getElementById(id);
 const feed = createFeed({
   proxy: params.get('proxy'),
@@ -26,7 +29,7 @@ document.body.appendChild(toasts.el);
 let prevState = null;
 const animator = createCarAnimator();
 const sessionId = (s) => `${s.session.type}|${s.session.name}|${s.session.circuit}`;
-const ui = { toasts: true, sel: null, demo: false, view: null, year: new Date().getFullYear(), cal: null, db: null };
+const ui = { filter: 'all', toasts: true, sel: null, demo: false, view: null, year: new Date().getFullYear(), cal: null, db: null };
 let lastKey = null, calDirty = true;
 const hist = new Map();
 let state = null;
@@ -76,7 +79,9 @@ function render() {
   if (key !== lastKey) { lastKey = key; calDirty = true; }
   if (key === 'calendar') { if (calDirty) { $('mainc').innerHTML = renderCalendar(ui.cal, ui, ui.db); calDirty = false; } }
   else $('mainc').innerHTML = renderMain(state, ui, hist, ref);
-  $('sidehead').innerHTML = renderSideHead(state);
+  $('sidehead').innerHTML = renderSideHead(state, ui);
+  feed.el.dataset.filter = ui.filter;
+  $('mainc').removeAttribute('aria-busy');
   $('sidefoot').textContent = state.sourceNote || '';
   feed.update(state.feed);
   const w2 = root.querySelector('.tw');
@@ -97,6 +102,8 @@ root.addEventListener('click', (e) => {
       if (act.dataset.key) source.openRace(Number(act.dataset.key)); else source.openRace();
       render();
     }
+    else if (a === 'feed-filter') { ui.filter = act.dataset.v; render(); }
+    else if (a === 'pick') { ui.sel = Number(act.dataset.num); render(); }
     else if (a === 'toggle-toasts') { ui.toasts = !ui.toasts; if (!ui.toasts) toasts.clear(); render(); }
     else if (a.startsWith('ev-')) source.trigger(a.slice(3));
     return;

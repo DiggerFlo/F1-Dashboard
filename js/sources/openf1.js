@@ -153,7 +153,7 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
   function build() {
     const now = vnow();
     if (!session) {
-      return { now: Date.now(), flag: 'green', session: { type: 'upcoming', startsAt: upcoming?.startsAt, meeting: upcoming?.meeting }, drivers: [], feed: [], track: track || { points: [] }, weather, upcoming: upcoming || {}, sourceNote: note || 'OpenF1: keine laufende Session.' };
+      return { now: Date.now(), flag: 'green', session: { type: 'upcoming', startsAt: upcoming?.startsAt, meeting: upcoming?.meeting }, drivers: [], feed: [], track: track || { points: [] }, weather, upcoming: upcoming || {}, problem: errors ? note : '', sourceNote: note || 'OpenF1: keine laufende Session.' };
     }
     const type = sessionType(session.session_name);
     const { flag, since } = flagFromControl(control);
@@ -187,6 +187,7 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
     ].sort((a, b) => b.t - a.t);
     return {
       now: replay ? now : Date.now(), flag, weather, feed, track: track || { points: [] }, drivers: rows, upcoming,
+      problem: errors ? note : '',
       sourceNote: (replay ? `OpenF1-Wiederholung (${speed}×): ${session.session_name}, ${session.location}` : `OpenF1 live: ${session.session_name}, ${session.location}`) + layoutNote + ' · Streckenlayouts: julesr0y/f1-circuits-svg (CC BY 4.0)',
       session: { type, name: session.session_name, circuit: session.circuit_short_name, lap: leaderLap || null, totalLaps: null, flagSince: since, phase: replay ? 'replay' : 'live', cutoff: type === 'quali' ? 10 : null,
         remaining: type === 'quali' ? Math.max(0, (Date.parse(session.date_end) - now) / 1000) : null },
@@ -218,7 +219,7 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
         const l = findLayout(db, nextSession, new Date(nextSession.date_start).getFullYear());
         if (l) track = { points: samplePath(l.d, 300), rotate: l.rotate };
       }
-    } catch (e) { note = `OpenF1 nicht erreichbar (${e.message}).`; }
+    } catch (e) { note = `OpenF1 nicht erreichbar (${e.message}).`; errors = 1; }
     tick();
   }
 
