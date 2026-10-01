@@ -10,28 +10,31 @@ Dashboard mit Streckenlayout und Fahrerpositionen, Live-Timing, Telemetrie je Fa
 | Safety Car / VSC / Gelb | Gelbes Banner, gelbe Strecke, SC-Marker, neutralisierte Anzeige |
 | Rote Flagge | Rotes Banner, Unterbrechungsdauer, eingefrorene Werte |
 
-Design: Design-System *Pitwall* (dunkel, kantig, Barlow Condensed / Inter / JetBrains Mono). Timing-Farben: Lila = schnellste Zeit, Grün = persönliche Bestzeit, Gelb = langsamer (immer mit Symbol, nicht nur Farbe).
+Design: Ant Design 5 im dunklen Pitwall-Theme (dunkel, kantig, Barlow Condensed / Inter / JetBrains Mono). Timing-Farben: Lila = schnellste Zeit, Grün = persönliche Bestzeit, Gelb = langsamer (immer mit Symbol, nicht nur Farbe).
 
 ## Starten
 
 ```
-npm start          # http://localhost:8080
-npm test           # Tests (node:test, keine Abhängigkeiten)
+npm install
+npm start          # Vite-Dev-Server, http://localhost:8080
+npm run build      # Produktions-Build nach dist/
+npm test           # Tests (Vitest)
 ```
 
-Keine Build-Schritte und keine Abhängigkeiten: statische Dateien mit ES-Modulen.
+Benötigt Node 18 oder neuer. Das UI ist React 18 mit Ant Design 5 (dunkles Theme in `src/theme.js`).
 
 ## Datenquellen
 
 URL-Parameter wählen die Quelle:
 
-- **Demo (Standard)** – Simulation, durchläuft automatisch Rennen → Safety Car → Rote Flagge → Qualifying → Vorschau. Oben gibt es Schaltflächen, um Flaggen selbst auszulösen. `?scenario=race|quali|upcoming|auto`
-- **OpenF1** – `?source=openf1` nutzt die [OpenF1-API](https://openf1.org).
-  - Läuft gerade eine Session, werden Live-Daten gezeigt. Live-Zugriff braucht ein Token: `?source=openf1&token=…`
-  - Sonst wird die letzte Session als **Wiederholung** abgespielt (`&speed=8`). `&session=<session_key>` oder `&type=race|quali|practice|upcoming` wählt gezielt.
-  - Ohne Session in den nächsten 4 Tagen, mit kommender Session: Vorschau mit Countdown.
+- **Demo (Standard)** – Wiederholung eines echten, beendeten Rennens mit Daten aus OpenF1: Telemetrie, Positionen, Abstände, Reifen, Funk (echte MP3), Race Control und Wetter. Die Daten werden beim Abspielen in Zeitfenstern von 4 Minuten in den Speicher geladen (nur temporär, nichts wird gespeichert) und lokal abgespielt, ein Fenster braucht nur vier API-Aufrufe für alle Fahrer. Oben stehen Pause, Tempo (1× bis 8×, `?speed=`) und eine Zeitleiste zum Springen. Ein Klick auf ein Rennen im Kalender spielt dieses Rennen ab, die Tabs Qualifying und Training die jeweilige Session. `?session=<session_key>` wählt gezielt eine Session. Ist OpenF1 nicht erreichbar, wechselt die Demo nach 30 s auf die Simulation.
+- **Simulation** – `?source=sim`: erfundene Daten mit Schaltflächen, um Flaggen selbst auszulösen (Grün, Gelb, Safety Car, VSC, Rot, Regen). `&scenario=race|quali|upcoming|auto`
+- **Echtdaten** – `?source=openf1` (Schalter „Echtdaten“ im Kopf):
+  - Läuft gerade eine Session, werden Live-Daten gezeigt (Abruf alle 2 s). Live-Zugriff braucht ein Token: `&token=…`
+  - Sonst wird die letzte Session wie in der Demo als Wiederholung abgespielt (`&speed=8`). `&session=<session_key>` oder `&type=race|quali|practice|upcoming` wählt gezielt.
+  - Ohne Session in den nächsten 4 Tagen, mit kommender Session: Vorschau mit Countdown, Zeitplan, Wertungen (Jolpica F1).
 
-Grenzen der OpenF1-Anbindung: Funk gibt es nur als Audio (kein Transkript), Qualifying zeigt die beste Runde statt getrennter Q1/Q2/Q3, die Rundenzahl des Rennens ist nicht bekannt, Wetter-Prognose und Fahrerwertung fehlen in der Vorschau. Die Anbindung wurde ohne Netzzugang entwickelt und ist nur durch Unit-Tests der Flaggen-Logik abgedeckt, nicht gegen die echte API geprüft.
+Grenzen der OpenF1-Anbindung: Funk gibt es nur als Audio (Transkript über die Auswahl im Funk-Eintrag), Qualifying zeigt die beste Runde statt getrennter Q1/Q2/Q3, die Rundenzahl des Rennens ist nicht bekannt, und die Wetter-Prognose fehlt in der Vorschau. Boxenstopps stammen in der Wiederholung aus dem OpenF1-Endpunkt `pit`, in Live-Daten sind sie noch nicht erfasst.
 
 ## Teamfarben und flüssige Bewegung
 
@@ -58,7 +61,7 @@ Tab **Kalender**: alle Rennen einer Saison als Karten mit Runde, Name, Ort, Datu
 
 ## Streckenlayouts
 
-Die Karten nutzen die Layouts aus [julesr0y/f1-circuits-svg](https://github.com/julesr0y/f1-circuits-svg) (CC BY 4.0, Namensnennung in `data/ATTRIBUTION.md` und in der Seitenleiste). `data/circuits.json` enthält alle Layouts mit Einsatz ab 2012. Neu erzeugen: `node scripts/build-circuits.mjs <pfad-zum-checkout>`.
+Die Karten nutzen die Layouts aus [julesr0y/f1-circuits-svg](https://github.com/julesr0y/f1-circuits-svg) (CC BY 4.0, Namensnennung in `public/data/ATTRIBUTION.md` und in der Seitenleiste). `public/data/circuits.json` enthält alle Layouts mit Einsatz ab 2012. Neu erzeugen: `node scripts/build-circuits.mjs <pfad-zum-checkout>`.
 
 Mit OpenF1-Daten wird das Layout über `circuit_short_name`/`location` der Session gewählt (Saison bestimmt die Variante) und die Positionsdaten der Fahrer per Drehung, Skalierung und Spiegelung darauf abgebildet. Passt die Abbildung nicht (Abweichung > 8 % des Streckenradius), zeigt die App stattdessen den Umriss aus den Positionsdaten. Die Ausrichtung folgt `f1-orientation` wie auf formula1.com.
 
@@ -72,23 +75,37 @@ Jeder Funkspruch hat einen Audio-Player und ein Dropdown **Transkribieren …**:
 
 Seitenleiste und Audio werden nicht neu aufgebaut, laufende Wiedergabe, offene Dropdowns und fertige Transkripte bleiben beim Live-Update erhalten. Sperrt der Audio-Server CORS, hilft `?proxy=https://dein-proxy/?u={url}`.
 
+## Funk in der Simulation
+
+Die Simulation (`?source=sim`) spielt echte Team-Funksprüche der jeweiligen Fahrer. `public/data/radio.json` enthält pro Clip den Link zur Aufnahme auf livetiming.formula1.com, die Dauer und die vorberechnete Wellenform. Die MP3-Dateien liegen nicht im Repository. Neu erzeugen: `node scripts/build-radio.mjs [Jahr] [Clips pro Fahrer]`.
+
+Die Aufnahmen kommen ohne CORS-Header. Abspielen funktioniert trotzdem, für Wellenform und Transkription liest der Vite-Server (`npm start`, `npm run preview`) sie über den Proxy `/f1static`. Auf reinem statischem Hosting fehlt der Proxy, dann erscheint eine Ersatz-Wellenform; mit `?proxy=https://dein-proxy/?u={url}` lässt sich ein eigener Proxy angeben.
+
+## OpenF1-Limits
+
+OpenF1 begrenzt die Anfragen (HTTP 429) und antwortet bei Abfragen ohne Treffer mit 404. `createOpenF1Client` stellt die Anfragen deshalb nacheinander (mindestens 0,3 s Abstand, ohne Token höchstens 27 pro Minute, gemessen liegt das Limit bei etwa 30), wartet bei 429/503 und wiederholt, und behandelt 404 als leere Liste. Ein Sessionwechsel braucht rund 18 Anfragen, bei mehreren Wechseln direkt hintereinander kann es deshalb kurz warten. Live wird gestaffelt abgefragt: Fahrzeuge alle 2 s, Abstände/Positionen/Race Control alle 6 s, Runden/Reifen/Funk/Wetter alle 15 s. Wiederholungen brauchen dagegen nur den Puffer (siehe oben). Mit `?token=` gelten die höheren Limits für angemeldete Nutzer.
+
 ## Aufbau
 
 ```
-index.html, css/styles.css     Pitwall-Tokens und Komponenten
-js/main.js                     Quelle wählen, rendern, Klicks
-js/views.js                    alle Ansichten aus einem normalisierten Zustand
-js/track.js                    Streckenkarte und Telemetrie-Verlauf (SVG)
+index.html, vite.config.js    Einstieg und Build
+src/main.jsx, src/App.jsx      React-Wurzel, Layout, Überholhinweise (antd notification)
+src/useDashboard.js            Datenquelle, Zustand, Auswahl, Kalender laden
+src/theme.js, src/styles.css   Ant-Design-Theme und Pitwall-Styles
+src/components/                Chrome (Kopf, Banner), Main (KPIs, Tabellen, Telemetrie), Calendar, Feed
+js/track.js                    Streckenkarte und Telemetrie-Verlauf (SVG-Strings), Fahrzeug-Animation
 js/svgpath.js, js/fit.js       SVG-Pfad -> Punkte, Anpassung der Positionsdaten ans Layout
-js/circuits.js                 Session -> Layout (Aliase, Saison)
-js/calendar.js                 Rennkalender aus OpenF1-Meetings/-Sessions bzw. Demo
-data/circuits.json             Layouts (generiert, CC BY 4.0)
-js/overtakes.js, js/toasts.js     Überholungen erkennen, Hinweise anzeigen
-js/feed.js                     Seitenleiste: Audio, Dropdown, Transkripte
+js/circuits.js, js/calendar.js Session -> Layout, Rennkalender (OpenF1 bzw. Demo)
+js/overtakes.js                Überholungen erkennen
 js/transcribe.js               Transkriptions-Engines (lokal, OpenAI, Demo)
 js/format.js                   Formatierung, Timing-Klassen, HTML-Escaping
 js/sources/demo.js             Simulation (Engine ohne Timer, testbar)
-js/sources/openf1.js           OpenF1-Adapter
+js/sources/openf1.js           OpenF1-Adapter (live und Wiederholung)
+js/sources/replay-buffer.js    Zeitfenster-Puffer der Wiederholung
+js/sources/replay-demo.js      Demo mit echten Daten, Rückfall auf die Simulation
+js/sources/jolpica.js          Jolpica F1: Kalender, Wertungen, Ergebnisse
+js/waveform.js, js/teams.js    Wellenformen, Team- und Reifenfarben
+public/data/circuits.json      Layouts (generiert, CC BY 4.0)
 ```
 
 Eine Datenquelle liefert `start(onState)`, `stop()`, `select(type)` und `trigger(event)`. `onState` bekommt:
@@ -101,4 +118,4 @@ Eine Datenquelle liefert `start(onState)`, `stop()`, `select(type)` und `trigger
   track: { points, sectors, turns }, weather, upcoming, safetyCar, sourceNote }
 ```
 
-Eine weitere Quelle (z. B. FastF1-Proxy oder eigenes Backend) muss nur diesen Zustand erzeugen. Alle Texte aus externen Quellen werden vor dem Rendern HTML-escaped.
+Eine weitere Quelle (z. B. FastF1-Proxy oder eigenes Backend) muss nur diesen Zustand erzeugen. Texte aus externen Quellen werden von React escaped, Farben laufen durch `safeColor`.

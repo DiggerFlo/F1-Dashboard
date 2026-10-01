@@ -2,18 +2,20 @@
 // Die Engine ist ohne Timer nutzbar (step/trigger/state), damit sie testbar bleibt.
 import { sectorClass, clamp } from '../format.js';
 import { pointAt } from '../track.js';
+import { findLayout } from '../circuits.js';
+import { samplePath } from '../svgpath.js';
 
 import { DEMO_TRACK } from './demo-track.js';
 import { buildDemoCalendar } from '../calendar.js';
 import { fmtLap } from '../format.js';
 
-const POINTS = DEMO_TRACK.points;
+const MONZA = { name: DEMO_TRACK.name, points: DEMO_TRACK.points, rotate: DEMO_TRACK.rotate };
 const SECTORS = [0, 0.34, 0.68]; // Sektorgrenzen der Simulation (Anteil der Runde)
-const DRIVERS = [['VAL', 'Valdor'], ['KRN', 'Kernes'], ['MOR', 'Moretti'], ['LUN', 'Lund'], ['BEC', 'Becker'], ['OSA', 'Osaki'], ['ROU', 'Rouvel'], ['TAN', 'Tanaka'], ['HAR', 'Harlow'], ['SIL', 'Silva'],
-  ['DUP', 'Dupont'], ['NOV', 'Novak'], ['BRA', 'Braga'], ['KEL', 'Keller'], ['ANS', 'Ansel'], ['FAR', 'Farrow'], ['MEN', 'Mendez'], ['WIE', 'Wieland'], ['ZAN', 'Zanetti'], ['COL', 'Colby']];
-// Erfundene Teams (zwei Fahrer je Team), Farben dunkel-tauglich und untereinander unterscheidbar.
-const TEAMS = [['Apex Racing', '#ff7a1a'], ['Nordlicht GP', '#2fd6c8'], ['Helix Motorsport', '#4a82e8'], ['Vulkan Racing', '#e5604d'], ['Corsa Verde', '#9ccc3c'],
-  ['Rosa Speed', '#f08fc0'], ['Argent Works', '#c4c8d0'], ['Duna Team', '#d9b26b'], ['Azur Racing', '#6fc8f0'], ['Lavendel GP', '#9d8cf0']];
+const DRIVERS = [['NOR', 'Norris'], ['PIA', 'Piastri'], ['LEC', 'Leclerc'], ['HAM', 'Hamilton'], ['VER', 'Verstappen'], ['TSU', 'Tsunoda'], ['RUS', 'Russell'], ['ANT', 'Antonelli'], ['ALB', 'Albon'], ['SAI', 'Sainz'],
+  ['LAW', 'Lawson'], ['HAD', 'Hadjar'], ['ALO', 'Alonso'], ['STR', 'Stroll'], ['OCO', 'Ocon'], ['BEA', 'Bearman'], ['HUL', 'Hülkenberg'], ['BOR', 'Bortoleto'], ['GAS', 'Gasly'], ['COL', 'Colapinto']];
+// Teams der Saison 2025 (zwei Fahrer je Team) in ungefährer Leistungsreihenfolge, mit den echten Teamfarben.
+const TEAMS = [['McLaren', '#ff8000'], ['Ferrari', '#e8002d'], ['Red Bull Racing', '#3671c6'], ['Mercedes', '#27f4d2'], ['Williams', '#64c4ff'],
+  ['Racing Bulls', '#6692ff'], ['Aston Martin', '#229971'], ['Haas', '#b6babd'], ['Kick Sauber', '#52e252'], ['Alpine', '#ff87bc']];
 const COMPOUNDS = ['M', 'H', 'M', 'S', 'H', 'M', 'H', 'M', 'S', 'H', 'M', 'H', 'M', 'H', 'S', 'M', 'H', 'M', 'H', 'M'];
 const BASE_LAP = 92.4;
 const TOTAL_LAPS = 57;
@@ -50,6 +52,10 @@ function speedProfile(f, num) {
 export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now() } = {}) {
   const rnd = mulberry32(seed);
   const baseNow = now;
+  let circuit = MONZA, meetingLabel = null;
+  const meetingName = () => `${meetingLabel || 'Großer Preis von Italien'} (Demo)`;
+  let clips = new Map(); // code -> echte Funksprüche aus public/data/radio.json
+  const clipPos = new Map();
   let seq = 0, bestLapAll = null, kind, simT, realT, flag, flagSince, feed, drivers, overall, remaining, upcomingEnd, autoIdx, weather, lastNow;
 
   const AUTO = [
@@ -91,7 +97,21 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
 
   function say(level, tag, text) { feed.unshift({ id: `rc${++seq}`, kind: 'rc', t: nowMs(), level, tag, text }); }
   // Funk kommt wie bei echten Daten ohne Text; der gesprochene Inhalt steckt in `speech`.
-  function radio(code, tag, speech) { feed.unshift({ id: `rd${++seq}`, kind: 'radio', t: nowMs(), code, tag, speech }); }
+  // Gibt es echte Aufnahmen des Fahrers (und real = true), kommt reihum eine davon, sonst der gesprochene Demo-Text.
+  function radio(code, tag, speech, real = false) {
+    const pool = real ? clips.get(code) : null;
+    if (pool?.length) {
+      const i = clipPos.get(code) || 0; clipPos.set(code, i + 1);
+      const c = pool[i % pool.length];
+      feed.unshift({ id: `rd${++seq}`, kind: 'radio', t: nowMs(), code, tag: 'FUNK', url: c.url, duration: c.duration, peaks: c.peaks, origin: c.session });
+      return;
+    }
+    feed.unshift({ id: `rd${++seq}`, kind: 'radio', t: nowMs(), code, tag, speech });
+  }
+  function setClips(list) {
+    clips = new Map();
+    for (const c of list || []) { if (!clips.has(c.code)) clips.set(c.code, []); clips.get(c.code).push(c); }
+  }
 
   function trigger(ev) {
     if (kind !== 'race') return;
@@ -101,15 +121,15 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
       if (prev === 'green') return;
       flag = 'green'; flagSince = null;
       say('', 'FLAGGE', prev === 'red' ? 'Restart. Strecke frei, Grüne Flagge.' : 'Strecke frei, Grüne Flagge.');
-      radio('VAL', 'TEAM', 'Grün, Grün. Wir greifen an.');
+      radio('NOR', 'TEAM', 'Grün, Grün. Wir greifen an.');
       return;
     }
     if (ev === prev) return;
     flag = ev; flagSince = nowMs();
-    if (ev === 'sc') { say('yellow', 'SC', 'SAFETY CAR EINGESETZT. Fahrzeug 16 (FAR) in Kurve 7 gestoppt.'); radio('MOR', 'BOX', 'Ich will reinkommen, günstiger Stopp. Bestätigen?'); radio('LUN', 'TEAM', 'Wir bleiben draußen. Halte Delta.'); }
+    if (ev === 'sc') { say('yellow', 'SC', 'SAFETY CAR EINGESETZT. Fahrzeug 16 (BEA) in Kurve 7 gestoppt.'); radio('LEC', 'BOX', 'Ich will reinkommen, günstiger Stopp. Bestätigen?'); radio('HAM', 'TEAM', 'Wir bleiben draußen. Halte Delta.'); }
     if (ev === 'vsc') { say('yellow', 'VSC', 'VIRTUAL SAFETY CAR EINGESETZT.'); }
     if (ev === 'yellow') { say('yellow', 'GELB', 'Gelbe Flagge Sektor 2.'); }
-    if (ev === 'red') { say('red', 'ROT', 'ROTE FLAGGE. Session unterbrochen. Alle Fahrzeuge in die Boxengasse.'); radio('VAL', 'BOX-INFO', 'Rote Flagge, wir fahren in die Boxengasse. Reifenwechsel möglich?'); radio('MOR', 'TEAM', 'Sind alle okay?'); }
+    if (ev === 'red') { say('red', 'ROT', 'ROTE FLAGGE. Session unterbrochen. Alle Fahrzeuge in die Boxengasse.'); radio('NOR', 'BOX-INFO', 'Rote Flagge, wir fahren in die Boxengasse. Reifenwechsel möglich?'); radio('LEC', 'TEAM', 'Sind alle okay?'); }
   }
 
   function refreshPositions() {
@@ -145,7 +165,7 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
     d.gear = sp === 0 ? 0 : clamp(Math.floor(sp / 45) + 1, 1, 8);
     d.rpm = sp === 0 ? 4000 : 6000 + (sp % 45) * 140;
     d.drs = kind === 'race' && flag === 'green' && d.pos > 1 && d.interval < 1 && sp > 250;
-    [d.x, d.y] = pointAt(POINTS, d.prog);
+    [d.x, d.y] = pointAt(circuit.points, d.prog);
   }
 
   function completeSector(d, prevSec, dur) {
@@ -250,11 +270,11 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
       if (rnd() < 0.01 * dtReal) { weather.air = clamp(weather.air + (rnd() - 0.5), 21, 28); weather.track = clamp(weather.track + (rnd() - 0.5) * 2, 32, 44); }
       if (flag === 'green' && rnd() < 0.05 * dtReal) {
         const d = drivers[Math.floor(rnd() * 8)]; const r = RADIO[Math.floor(rnd() * RADIO.length)];
-        radio(d.code, r[0], r[1]);
+        radio(d.code, r[0], r[1], true);
       }
     } else if (kind === 'quali' || kind === 'practice') {
       stepQuali(dt);
-      if (rnd() < 0.04 * dtReal) { const d = drivers[Math.floor(rnd() * 10)]; radio(d.code, 'TEAM', 'Verkehr in Kurve 4, ich musste aufmachen.'); }
+      if (rnd() < 0.04 * dtReal) { const d = drivers[Math.floor(rnd() * 10)]; radio(d.code, 'TEAM', 'Verkehr in Kurve 4, ich musste aufmachen.', true); }
     }
     if (kind !== 'upcoming') refreshPositions();
     if (feed.length > 60) feed.length = 60;
@@ -263,12 +283,12 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
   function state() {
     const base = {
       now: nowMs(), flag, sourceNote: 'Simulierte Demo-Daten. Echte Daten: ?source=openf1 · Streckenlayouts: julesr0y/f1-circuits-svg (CC BY 4.0)',
-      weather: { air: Math.round(weather.air), track: Math.round(weather.track), rain: weather.rain }, track: { points: POINTS, rotate: DEMO_TRACK.rotate }, feed: [...feed],
+      weather: { air: Math.round(weather.air), track: Math.round(weather.track), rain: weather.rain }, track: { points: circuit.points, rotate: circuit.rotate }, feed: [...feed],
     };
     if (kind === 'upcoming') {
-      return { ...base, flag: 'green', session: { type: 'upcoming', name: 'Rennen', meeting: 'Großer Preis von Italien (Demo)', circuit: 'Autodromo Nazionale Monza', startsAt: upcomingEnd }, drivers: [],
-        upcoming: { startsAt: upcomingEnd, nextLabel: 'Nächstes Rennen', meeting: 'Großer Preis von Italien (Demo)', circuit: 'Autodromo Nazionale Monza',
-          facts: [['Rundenlänge', '5.793 km'], ['Renndistanz', '53 Runden'], ['Layout', 'seit 2000'], ['DRS-Zonen', '2']],
+      return { ...base, flag: 'green', session: { type: 'upcoming', name: 'Rennen', meeting: meetingName(), circuit: circuit.name, startsAt: upcomingEnd }, drivers: [],
+        upcoming: { startsAt: upcomingEnd, nextLabel: 'Nächstes Rennen', meeting: meetingName(), circuit: circuit.name,
+          facts: circuit === MONZA ? [['Rundenlänge', '5.793 km'], ['Renndistanz', '53 Runden'], ['Layout', 'seit 2000'], ['DRS-Zonen', '2']] : [['Strecke', circuit.name], ['Renndistanz', `${TOTAL_LAPS} Runden`]],
           schedule: [['Training 1', 'Fr 11:30'], ['Training 2', 'Fr 15:00'], ['Training 3', 'Sa 11:30'], ['Qualifying', 'Sa 15:00'], ['Rennen', 'So 14:00']],
           weather: [['Lufttemperatur', '24 °C'], ['Streckentemperatur', '38 °C'], ['Regenwahrscheinlichkeit', '10 %'], ['Wind', '12 km/h SW']],
           standings: DRIVERS.slice(0, 10).map(([code], i) => ({ code, points: 310 - i * 21, wins: Math.max(0, 7 - i) })) },
@@ -276,12 +296,12 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
     }
     const leader = drivers[0];
     const session = kind === 'race'
-      ? { type: 'race', name: 'Rennen', circuit: 'Autodromo Nazionale Monza', lap: Math.min(TOTAL_LAPS, Math.floor(leader.prog)), totalLaps: TOTAL_LAPS, flagSince }
+      ? { type: 'race', name: 'Rennen', circuit: circuit.name, lap: Math.min(TOTAL_LAPS, Math.floor(leader.prog)), totalLaps: TOTAL_LAPS, flagSince }
       : kind === 'practice'
-        ? { type: 'practice', name: 'Training 2', circuit: 'Autodromo Nazionale Monza', remaining, cutoff: null, flagSince }
-        : { type: 'quali', name: 'Q2', circuit: 'Autodromo Nazionale Monza', remaining, cutoff: 10, flagSince };
+        ? { type: 'practice', name: 'Training 2', circuit: circuit.name, remaining, cutoff: null, flagSince }
+        : { type: 'quali', name: 'Q2', circuit: circuit.name, remaining, cutoff: 10, flagSince };
     const out = { ...base, session, drivers: drivers.map((d) => ({ ...d, onTrack: kind === 'quali' || kind === 'practice' ? d.onTrack : true })) };
-    if (flag === 'sc') { const [x, y] = pointAt(POINTS, leader.prog + 0.03); out.safetyCar = { x, y }; }
+    if (flag === 'sc') { const [x, y] = pointAt(circuit.points, leader.prog + 0.03); out.safetyCar = { x, y }; }
     return out;
   }
 
@@ -293,17 +313,24 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
   realT = 0; autoIdx = 0;
   if (scenario === 'auto') { AUTO[0][1](); autoIdx = 1; } else setKind(scenario);
 
-  return { step, trigger, setScenario, state, get kind() { return kind; } };
+  /** Strecke wechseln (Punkte und Ausrichtung aus dem Layout-Datensatz); null = Standard (Monza). */
+  function setCircuit(c, meeting = null) { circuit = c || MONZA; meetingLabel = c ? meeting : null; if (drivers) drivers.forEach((d) => { [d.x, d.y] = pointAt(circuit.points, d.prog); }); }
+
+  return { step, trigger, setScenario, setCircuit, setClips, state, get kind() { return kind; } };
 }
 
 export function createDemoSource(opts = {}) {
   const engine = createDemoEngine(opts);
-  let timer = null;
+  let timer = null, emit = null;
   return {
     id: 'demo',
     demo: true,
+    sim: true,
     start(onState, tickMs = 500) {
+      // Echte Funksprüche (OpenF1, mit vorberechneter Wellenform) nachladen; ohne die Datei spricht die Demo synthetisch
+      if (typeof fetch === 'function' && typeof location !== 'undefined') fetch('data/radio.json').then((r) => (r.ok ? r.json() : [])).then((c) => engine.setClips(c)).catch(() => {});
       const push = () => onState(engine.state());
+      emit = push;
       push();
       timer = setInterval(() => { engine.step(tickMs / 1000); push(); }, tickMs);
     },
@@ -311,6 +338,12 @@ export function createDemoSource(opts = {}) {
     select(type) { engine.setScenario(['practice', 'quali', 'upcoming'].includes(type) ? type : 'race'); },
     trigger(ev) { engine.trigger(ev); },
     async calendar(year, db) { return { year, demo: true, races: buildDemoCalendar(db, year) }; },
-    openRace() { engine.setScenario('race'); },
+    /** Rennen aus dem Kalender: dessen Streckenlayout laden und ein Demo-Rennen darauf starten. */
+    openRace(race, db) {
+      const l = race && db && findLayout(db, { circuit_short_name: race.circuit, location: race.location, country_name: race.country, year: race.year }, race.year);
+      engine.setCircuit(l ? { name: l.circuit, points: samplePath(l.d, 300), rotate: l.rotate } : null, race?.meeting);
+      engine.setScenario('race');
+      emit?.(); // sofort anzeigen, nicht erst beim nächsten Takt
+    },
   };
 }

@@ -1,4 +1,4 @@
-// Zuordnung Session -> Streckenlayout (Daten aus julesr0y/f1-circuits-svg, CC BY 4.0, siehe data/ATTRIBUTION.md).
+// Zuordnung Session -> Streckenlayout (Daten aus julesr0y/f1-circuits-svg, CC BY 4.0, siehe public/data/ATTRIBUTION.md).
 
 export const norm = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 

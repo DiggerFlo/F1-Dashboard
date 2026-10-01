@@ -1,4 +1,4 @@
-// Erzeugt data/circuits.json (aktuelle Layouts, nur Pfaddaten) und js/sources/demo-track.js
+// Erzeugt public/data/circuits.json (aktuelle Layouts, nur Pfaddaten) und js/sources/demo-track.js
 // aus einem Checkout von https://github.com/julesr0y/f1-circuits-svg (CC BY 4.0).
 // Aufruf: node scripts/build-circuits.mjs /pfad/zu/f1-circuits-svg
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -20,7 +20,7 @@ for (const c of list) {
   });
   if (layouts.length) out[c.id] = { name: c.name, country: c.countryId, layouts };
 }
-writeFileSync('data/circuits.json', JSON.stringify(out));
+writeFileSync('public/data/circuits.json', JSON.stringify(out));
 
 const monza = out.monza.layouts.at(-1);
 const pts = samplePath(monza.d, 160).map((p) => p.map((v) => Math.round(v * 10) / 10));

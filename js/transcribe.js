@@ -14,6 +14,7 @@ export const enginesFor = (msg) => (msg.speech ? [DEMO_ENGINE] : ENGINES);
 
 /** Audio-URL, optional über einen Proxy (Vorlage mit {url}), falls die Quelle kein CORS erlaubt. */
 export function audioUrl(url, proxy) {
+  if (proxy === 'local') return url.replace(/^https:\/\/livetiming\.formula1\.com\//, '/f1static/'); // Proxy des Vite-Servers (siehe vite.config.js)
   return proxy ? proxy.replace('{url}', encodeURIComponent(url)) : url;
 }
 

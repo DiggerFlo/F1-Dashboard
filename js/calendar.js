@@ -17,7 +17,7 @@ export function raceStatus(start, end, now) {
 }
 
 /** Nummeriert nach Datum, setzt status und markiert das nächste noch nicht beendete Rennen. */
-function finish(races, now) {
+export function finishCalendar(races, now) {
   races.sort((a, b) => a.start - b.start);
   races.forEach((r, i) => { r.round = i + 1; r.status = raceStatus(r.start, r.end, now); r.next = false; });
   const next = races.find((r) => r.status !== 'done');
@@ -32,7 +32,7 @@ export function buildOpenF1Calendar(meetings, sessions, now = Date.now()) {
     return { key: s.session_key, meeting: m.meeting_name || s.location, official: m.meeting_official_name || '', location: s.location, country: s.country_name, circuit: s.circuit_short_name,
       year: s.year, start: Date.parse(s.date_start), end: Date.parse(s.date_end) };
   });
-  return finish(races, now);
+  return finishCalendar(races, now);
 }
 
 const DEMO_ORDER = ['melbourne', 'shanghai', 'suzuka', 'bahrain', 'jeddah', 'miami', 'imola', 'monaco', 'madring', 'catalunya', 'montreal', 'spielberg', 'silverstone',
@@ -48,5 +48,5 @@ export function buildDemoCalendar(db, year, now = Date.now()) {
     const start = base + i * 14 * 86400000;
     return { key: null, demo: true, meeting: db[id].name, official: '', location: pretty(id), country: pretty(db[id].country), circuit: id, year, start, end: start + 2 * 3600000 };
   });
-  return finish(races, now);
+  return finishCalendar(races, now);
 }
