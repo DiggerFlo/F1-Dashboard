@@ -57,3 +57,10 @@ export function sectorClass(value, personalBest, overallBest) {
 }
 
 export const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+
+/** Nur gültige #rrggbb-Farben durchlassen (Werte aus externen Quellen landen in Stilen). */
+export function safeColor(c) {
+  if (typeof c !== 'string') return null;
+  const v = c.trim().replace(/^#?/, '#');
+  return /^#[0-9a-fA-F]{6}$/.test(v) ? v.toLowerCase() : null;
+}

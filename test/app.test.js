@@ -9,6 +9,8 @@ import { fitSimilarity } from '../js/fit.js';
 import { findLayout, seasonsInclude } from '../js/circuits.js';
 import { buildOpenF1Calendar, buildDemoCalendar, yearsFor, raceStatus } from '../js/calendar.js';
 import { detectOvertakes } from '../js/overtakes.js';
+import { createCarAnimator, nearestFraction, pointAt } from '../js/track.js';
+import { safeColor } from '../js/format.js';
 import { renderChrome, renderMain, renderCalendar } from '../js/views.js';
 import { transcribe, audioUrl, enginesFor, _resetForTests } from '../js/transcribe.js';
 
@@ -265,4 +267,59 @@ test('demo has practice scenario, weather event and race-control extras', () => 
   const tags = new Set();
   for (let i = 0; i < 4000; i++) { e.step(0.5); e.state().feed.slice(0, 3).forEach((m) => tags.add(m.tag)); }
   assert.ok(tags.has('BOX') && tags.has('SCHNELLSTE'), [...tags].join());
+});
+
+const LOOP = samplePath(DB.monza.layouts.at(-1).d, 300);
+const distToLoop = (p) => Math.min(...LOOP.map((q, i) => { const r = LOOP[(i + 1) % LOOP.length]; const dx = r[0] - q[0], dy = r[1] - q[1], l = dx * dx + dy * dy || 1; const k = Math.max(0, Math.min(1, ((p[0] - q[0]) * dx + (p[1] - q[1]) * dy) / l)); return Math.hypot(p[0] - q[0] - dx * k, p[1] - q[1] - dy * k); }));
+const stateAt = (f, extra = {}) => { const [x, y] = pointAt(LOOP, f); return { track: { points: LOOP }, drivers: [{ num: 1, code: 'AAA', x, y, onTrack: true, ...extra }] }; };
+
+test('nearestFraction inverts pointAt', () => {
+  for (const f of [0.02, 0.3, 0.55, 0.97]) {
+    const [x, y] = pointAt(LOOP, f);
+    const g = nearestFraction(LOOP, x + 0.2, y - 0.2);
+    assert.ok(Math.min(Math.abs(g - f), 1 - Math.abs(g - f)) < 0.01, `${f} -> ${g}`);
+  }
+});
+
+test('animator: moves along the track between updates, also across the start line', () => {
+  const a = createCarAnimator();
+  a.update(stateAt(0.90), 0);
+  a.update(stateAt(0.98), 500); // 8 % einer Runde in 500 ms
+  for (const t of [500, 600, 750, 900, 1000]) {
+    const p = a.sample(t).get(1);
+    assert.ok(distToLoop(p) < 1.5, `liegt auf der Strecke bei t=${t}`);
+  }
+  const mid = a.sample(750).get(1);
+  const [ex, ey] = pointAt(LOOP, 0.94);
+  assert.ok(Math.hypot(mid[0] - ex, mid[1] - ey) < 3, 'Mitte entspricht Streckenmitte, nicht der Sehne');
+  a.update(stateAt(0.04), 1000); // über Start/Ziel
+  const wrap = a.sample(1250).get(1);
+  const [wx, wy] = pointAt(LOOP, 0.01);
+  assert.ok(Math.hypot(wrap[0] - wx, wrap[1] - wy) < 4, 'läuft über die Ziellinie statt rückwärts');
+});
+
+test('animator: snaps on big jumps, drops cars that leave, handles no track', () => {
+  const a = createCarAnimator();
+  a.update(stateAt(0.1), 0); a.update(stateAt(0.6), 500);
+  const [sx, sy] = pointAt(LOOP, 0.6);
+  const p = a.sample(500).get(1);
+  assert.ok(Math.hypot(p[0] - sx, p[1] - sy) < 1, 'Sprung wird nicht überblendet');
+  a.update({ track: { points: LOOP }, drivers: [] }, 1000);
+  assert.equal(a.sample(1000).size, 0);
+  a.update({ track: { points: [] }, drivers: [{ num: 1, x: 1, y: 1 }] }, 1500);
+  assert.equal(a.sample(1500).size, 0);
+});
+
+test('safeColor only lets valid hex colors through', () => {
+  assert.equal(safeColor('#FF7A1A'), '#ff7a1a');
+  assert.equal(safeColor('e8112d'), '#e8112d');
+  for (const bad of ['red', '#fff', 'url(javascript:alert(1))', '#12345g', '"><img>', null, undefined, 5]) assert.equal(safeColor(bad), null);
+});
+
+test('demo drivers have teams and colors that render safely', () => {
+  const st = createDemoEngine({ scenario: 'race', seed: 1 }).state();
+  assert.ok(st.drivers.every((d) => d.team && safeColor(d.color)));
+  assert.equal(new Set(st.drivers.map((d) => d.color)).size, 10);
+  const html = renderMain({ ...st, drivers: st.drivers.map((d, i) => (i === 0 ? { ...d, color: 'red;background:url(x)' } : d)) }, { sel: 3 }, new Map(), null);
+  assert.ok(!html.includes('url(x)'));
 });

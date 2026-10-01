@@ -2,6 +2,7 @@ import { renderChrome, renderMain, renderSideHead, renderCalendar } from './view
 import { createFeed } from './feed.js';
 import { detectOvertakes } from './overtakes.js';
 import { createToasts } from './toasts.js';
+import { createCarAnimator, applyCarPositions } from './track.js';
 import { createDemoSource } from './sources/demo.js';
 import { createOpenF1Source } from './sources/openf1.js';
 
@@ -23,6 +24,7 @@ $('feedslot').replaceWith(feed.el);
 const toasts = createToasts();
 document.body.appendChild(toasts.el);
 let prevState = null;
+const animator = createCarAnimator();
 const sessionId = (s) => `${s.session.type}|${s.session.name}|${s.session.circuit}`;
 const ui = { toasts: true, sel: null, demo: false, view: null, year: new Date().getFullYear(), cal: null, db: null };
 let lastKey = null, calDirty = true;
@@ -69,6 +71,7 @@ function render() {
   const top = state.drivers[0];
   const ref = top && top.num !== ui.sel ? hist.get(top.num) : null;
   $('chrome').innerHTML = renderChrome(state, ui);
+  ui.pos = animator.sample(performance.now());
   const key = ui.view || 'live';
   if (key !== lastKey) { lastKey = key; calDirty = true; }
   if (key === 'calendar') { if (calDirty) { $('mainc').innerHTML = renderCalendar(ui.cal, ui, ui.db); calDirty = false; } }
@@ -111,7 +114,17 @@ root.addEventListener('keydown', (e) => {
 });
 
 source.start((s) => {
-  if (prevState && sessionId(prevState) === sessionId(s) && ui.toasts) detectOvertakes(prevState, s).slice(0, 3).forEach((o) => toasts.show(o));
-  else toasts.clear();
+  const color = new Map(s.drivers.map((d) => [d.code, d.color]));
+  if (prevState && sessionId(prevState) === sessionId(s) && ui.toasts) detectOvertakes(prevState, s).slice(0, 3).forEach((o) => toasts.show({ ...o, byColor: color.get(o.by), overColor: color.get(o.over) }));
+  else { toasts.clear(); if (!prevState || sessionId(prevState) !== sessionId(s)) animator.reset(); }
+  animator.update(s, performance.now());
   prevState = s; state = s; remember(s); render();
 });
+
+// Fahrzeuge pro Bild entlang der Strecke bewegen (die Daten kommen nur alle 0,5 bis 2 s)
+function frame(now) {
+  const svg = root.querySelector('svg[data-rot]');
+  if (svg && state) applyCarPositions(svg, animator.sample(now));
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);

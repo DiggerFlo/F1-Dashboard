@@ -11,6 +11,9 @@ const POINTS = DEMO_TRACK.points;
 const SECTORS = [0, 0.34, 0.68]; // Sektorgrenzen der Simulation (Anteil der Runde)
 const DRIVERS = [['VAL', 'Valdor'], ['KRN', 'Kernes'], ['MOR', 'Moretti'], ['LUN', 'Lund'], ['BEC', 'Becker'], ['OSA', 'Osaki'], ['ROU', 'Rouvel'], ['TAN', 'Tanaka'], ['HAR', 'Harlow'], ['SIL', 'Silva'],
   ['DUP', 'Dupont'], ['NOV', 'Novak'], ['BRA', 'Braga'], ['KEL', 'Keller'], ['ANS', 'Ansel'], ['FAR', 'Farrow'], ['MEN', 'Mendez'], ['WIE', 'Wieland'], ['ZAN', 'Zanetti'], ['COL', 'Colby']];
+// Erfundene Teams (zwei Fahrer je Team), Farben dunkel-tauglich und untereinander unterscheidbar.
+const TEAMS = [['Apex Racing', '#ff7a1a'], ['Nordlicht GP', '#2fd6c8'], ['Helix Motorsport', '#4a82e8'], ['Vulkan Racing', '#e5604d'], ['Corsa Verde', '#9ccc3c'],
+  ['Rosa Speed', '#f08fc0'], ['Argent Works', '#c4c8d0'], ['Duna Team', '#d9b26b'], ['Azur Racing', '#6fc8f0'], ['Lavendel GP', '#9d8cf0']];
 const COMPOUNDS = ['M', 'H', 'M', 'S', 'H', 'M', 'H', 'M', 'S', 'H', 'M', 'H', 'M', 'H', 'S', 'M', 'H', 'M', 'H', 'M'];
 const BASE_LAP = 92.4;
 const TOTAL_LAPS = 57;
@@ -57,7 +60,7 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
   function speedFactor() { return kind === 'upcoming' ? 1 : 6; }
 
   function newDriver(i) {
-    return { num: i + 1, code: DRIVERS[i][0], name: DRIVERS[i][1], skill: i * 0.09, prog: 0, v: 0, secStart: 0, secT: [], bestSec: [null, null, null], sectors: [null, null, null], sectorCls: ['', '', ''],
+    return { num: i + 1, code: DRIVERS[i][0], name: DRIVERS[i][1], team: TEAMS[i >> 1][0], color: TEAMS[i >> 1][1], skill: i * 0.09, prog: 0, v: 0, secStart: 0, secT: [], bestSec: [null, null, null], sectors: [null, null, null], sectorCls: ['', '', ''],
       best: null, last: null, stops: 0, tyre: COMPOUNDS[i], tyreAge: 8 + (i % 7), pit: 0, onTrack: true, speed: 0, throttle: 0, brake: 0, gear: 1, rpm: 0, drs: false, gap: 0, interval: 0, pos: i + 1, x: null, y: null, wait: 0 };
   }
 

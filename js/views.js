@@ -1,4 +1,4 @@
-import { esc, fmtLap, fmtSector, fmtGap, fmtClock, splitCountdown } from './format.js';
+import { esc, safeColor, fmtLap, fmtSector, fmtGap, fmtClock, splitCountdown } from './format.js';
 import { trackSvg, tracesSvg, miniTrackSvg } from './track.js';
 import { findLayout } from './circuits.js';
 import { samplePath } from './svgpath.js';
@@ -17,6 +17,7 @@ const tyre = (c) => {
   const cls = k === 's' ? 's' : k === 'h' ? 'h' : '';
   return `<span class="tyre ${cls}" title="${esc(c || 'unbekannt')}">${esc((c || '?')[0].toUpperCase())}</span>`;
 };
+const codeCell = (d) => `<span class="tc" style="background:${safeColor(d.color) || 'var(--line)'}" aria-hidden="true"></span><span class="code" title="${esc([d.name, d.team].filter(Boolean).join(' · '))}">${esc(d.code)}</span>`;
 const sec = (v, c) => (c ? `<span class="${c}">${fmtSector(v)}</span>` : fmtSector(v));
 const bar = (v, cls = '') => `<span class="bar ${cls}"><i style="width:${Math.round(v || 0)}%"></i></span>`;
 const kpi = (l, v, d, c = '') => `<div class="card kpi"><span class="label">${esc(l)}</span><span class="v mono">${esc(v)}</span><span class="d mono ${c}">${esc(d)}</span></div>`;
@@ -109,7 +110,7 @@ function timingTable(state, sel) {
     const body = rows.map((d, i) => {
       const cls = [i === 0 ? 'lead' : '', d.num === sel ? 'sel' : '', s.cutoff && i === s.cutoff - 1 ? 'cut' : ''].join(' ').trim();
       const best = d.best != null ? (i === 0 ? `<span class="p">${fmtLap(d.best)}</span>` : fmtLap(d.best)) : '—';
-      return `<tr class="${cls}" data-num="${d.num}" tabindex="0"><td class="pos">${d.pos}</td><td><span class="code" title="${esc(d.name || '')}">${esc(d.code)}</span></td><td>${tyre(d.tyre)}</td><td class="mono r">${best}</td><td class="mono r">${d.best != null && i ? fmtGap(d.best - pole) : i === 0 ? 'Pole' : '—'}</td><td class="mono r">${fmtLap(d.last)}</td>${[0, 1, 2].map((k) => `<td class="mono r">${sec(d.sectors?.[k], d.sectorCls?.[k])}</td>`).join('')}<td>${d.onTrack ? '<span class="drs">PUSH</span>' : '<span class="drs off">BOX</span>'}</td></tr>`;
+      return `<tr class="${cls}" data-num="${d.num}" tabindex="0"><td class="pos">${d.pos}</td><td>${codeCell(d)}</td><td>${tyre(d.tyre)}</td><td class="mono r">${best}</td><td class="mono r">${d.best != null && i ? fmtGap(d.best - pole) : i === 0 ? 'Pole' : '—'}</td><td class="mono r">${fmtLap(d.last)}</td>${[0, 1, 2].map((k) => `<td class="mono r">${sec(d.sectors?.[k], d.sectorCls?.[k])}</td>`).join('')}<td>${d.onTrack ? '<span class="drs">PUSH</span>' : '<span class="drs off">BOX</span>'}</td></tr>`;
     }).join('');
     return `<table><thead>${head}</thead><tbody>${body}</tbody></table>`;
   }
@@ -118,7 +119,7 @@ function timingTable(state, sel) {
   const body = rows.map((d, i) => {
     const cls = [i === 0 ? 'lead' : '', d.num === sel ? 'sel' : ''].join(' ').trim();
     const status = d.pit ? '<span class="pit">PIT</span>' : frozen ? '<span class="pit">BOX</span>' : '';
-    return `<tr class="${cls}" data-num="${d.num}" tabindex="0"><td class="pos">${d.pos}</td><td><span class="code" title="${esc(d.name || '')}">${esc(d.code)}</span></td><td>${tyre(d.tyre)}</td><td class="mono r">${fmtGap(d.gap, i === 0)}</td><td class="mono r">${i === 0 ? '—' : fmtGap(d.interval)}</td><td class="mono r">${fmtLap(d.last)}</td>${[0, 1, 2].map((k) => `<td class="mono r">${sec(d.sectors?.[k], d.sectorCls?.[k])}</td>`).join('')}<td class="mono r">${d.speed != null ? Math.round(d.speed) : '—'}</td><td>${bar(d.throttle)} ${bar(d.brake, 'b')}</td><td class="mono r">${d.gear ?? '—'}</td><td>${d.drs ? '<span class="drs">DRS</span>' : '<span class="drs off">—</span>'}</td><td>${status}</td></tr>`;
+    return `<tr class="${cls}" data-num="${d.num}" tabindex="0"><td class="pos">${d.pos}</td><td>${codeCell(d)}</td><td>${tyre(d.tyre)}</td><td class="mono r">${fmtGap(d.gap, i === 0)}</td><td class="mono r">${i === 0 ? '—' : fmtGap(d.interval)}</td><td class="mono r">${fmtLap(d.last)}</td>${[0, 1, 2].map((k) => `<td class="mono r">${sec(d.sectors?.[k], d.sectorCls?.[k])}</td>`).join('')}<td class="mono r">${d.speed != null ? Math.round(d.speed) : '—'}</td><td>${bar(d.throttle)} ${bar(d.brake, 'b')}</td><td class="mono r">${d.gear ?? '—'}</td><td>${d.drs ? '<span class="drs">DRS</span>' : '<span class="drs off">—</span>'}</td><td>${status}</td></tr>`;
   }).join('');
   return `<table><thead>${head}</thead><tbody>${body}</tbody></table>`;
 }
@@ -129,7 +130,7 @@ function detail(state, sel, hist, ref) {
   const h = hist.get(d.num) || [];
   const f = state.flag;
   const legendRef = state.session.type === 'quali' ? '<span><i style="background:#b14bff"></i>Pole-Runde</span>' : '';
-  return `<div class="sec"><div class="sech"><h3 class="disp">Telemetrie · ${esc(d.code)} · P${d.pos}</h3><span class="label">Letzte Samples</span></div><div class="two"><div class="card traces">${tracesSvg(h, state.session.type === 'quali' ? ref : null)}<div class="legend"><span><i></i>Geschwindigkeit</span><span><i style="background:#9a9aa6;height:2px"></i>Gas</span><span><i style="background:repeating-linear-gradient(90deg,#f5f5f3 0 4px,transparent 4px 7px);height:2px"></i>Bremse</span>${legendRef}</div></div><div class="kpis">${
+  return `<div class="sec"><div class="sech"><h3 class="disp">Telemetrie · ${esc(d.code)} · P${d.pos}</h3><span class="label">${d.team ? `<span class="tc" style="background:${safeColor(d.color) || 'var(--line)'}"></span>${esc(d.team)} · ` : ''}Letzte Samples</span></div><div class="two"><div class="card traces">${tracesSvg(h, state.session.type === 'quali' ? ref : null)}<div class="legend"><span><i></i>Geschwindigkeit</span><span><i style="background:#9a9aa6;height:2px"></i>Gas</span><span><i style="background:repeating-linear-gradient(90deg,#f5f5f3 0 4px,transparent 4px 7px);height:2px"></i>Bremse</span>${legendRef}</div></div><div class="kpis">${
     kpi('Geschwindigkeit', d.speed != null ? String(Math.round(d.speed)) : '—', 'km/h', 'muted')}${
     kpi('Gang / U/min', `${d.gear ?? '—'} · ${d.rpm != null ? (d.rpm / 1000).toFixed(1) + 'k' : '—'}`, 'Bereich 8.0–12.5k', f === 'sc' ? 'y' : 'muted')}${
     kpi('Gas / Bremse', `${Math.round(d.throttle || 0)}% / ${Math.round(d.brake || 0)}%`, d.brake > 0 ? 'bremst' : 'Gas', 'muted')}${
@@ -170,7 +171,7 @@ export function renderMain(state, ui, hist, ref) {
   if (t === 'upcoming') return upcomingBody(state);
   const label = t === 'quali' ? 'Qualifying' : t === 'practice' ? 'Training' : 'Rennen';
   const ttl = state.flag === 'sc' ? 'Live-Timing · Safety Car' : state.flag === 'red' ? 'Aufstellung beim Restart' : t === 'quali' ? 'Qualifying-Ergebnis' : t === 'practice' ? 'Trainingsergebnis' : 'Live-Timing';
-  return `<div class="hero"><div class="card map"><div class="sech"><span class="label">Streckenlayout · ${label}${state.session.lap ? ' · Runde ' + state.session.lap : ''}</span><span class="label">${esc(state.session.circuit || '')}</span></div>${trackSvg(state, ui.sel)}</div><div class="kpis">${kpisFor(state)}</div></div>
+  return `<div class="hero"><div class="card map"><div class="sech"><span class="label">Streckenlayout · ${label}${state.session.lap ? ' · Runde ' + state.session.lap : ''}</span><span class="label">${esc(state.session.circuit || '')}</span></div>${trackSvg(state, ui.sel, ui.pos)}</div><div class="kpis">${kpisFor(state)}</div></div>
     <div class="sec"><div class="sech"><h3 class="disp">${ttl}</h3><span class="label">Zeile anklicken für Telemetrie</span></div><div class="tw">${timingTable(state, ui.sel)}</div></div>
     ${detail(state, ui.sel, hist, ref)}`;
 }

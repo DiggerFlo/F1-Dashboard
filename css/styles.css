@@ -133,3 +133,7 @@ tr[data-num]{cursor:pointer}tr[data-num]:hover{background:#1e1e25}
 .hint{background:none;border:1px solid var(--line);color:var(--ink-muted);border-radius:2px;height:28px;padding:0 10px;font:600 11px Inter,sans-serif;letter-spacing:.06em;text-transform:uppercase;cursor:pointer}
 .hint[aria-pressed="true"]{color:var(--ink);border-color:var(--ink-muted)}
 .hint:focus-visible{outline:2px solid var(--ink);outline-offset:1px}
+
+.tc{display:inline-block;width:4px;height:14px;margin-right:6px;vertical-align:-2px;border-radius:0;background:var(--line)}
+td .tc{height:18px;vertical-align:-4px}
+.toast .tc{height:14px;margin:0 4px 0 2px}

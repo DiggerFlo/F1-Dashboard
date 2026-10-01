@@ -172,7 +172,7 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
       const stint = stints.filter((s) => s.driver_number === n && s.lap_start <= (o?.lap || 1) + 1).sort((a, b) => b.stint_number - a.stint_number)[0];
       const secs = o?.last ? [o.last.duration_sector_1, o.last.duration_sector_2, o.last.duration_sector_3] : [null, null, null];
       return {
-        num: n, code: d.name_acronym, name: d.last_name || d.full_name, pos: pos.get(n)?.position ?? 99, gap: iv?.gap_to_leader != null && typeof iv.gap_to_leader === 'number' ? iv.gap_to_leader : null,
+        num: n, code: d.name_acronym, name: d.last_name || d.full_name, team: d.team_name || null, color: d.team_colour ? `#${d.team_colour}` : null, pos: pos.get(n)?.position ?? 99, gap: iv?.gap_to_leader != null && typeof iv.gap_to_leader === 'number' ? iv.gap_to_leader : null,
         interval: typeof iv?.interval === 'number' ? iv.interval : null, last: o?.last?.lap_duration ?? null, best: o?.best ?? null, sectors: secs,
         sectorCls: secs.map((v, i) => sectorClass(v, o?.bestSec[i], overall[i])), tyre: stint?.compound ? stint.compound[0] : null, stops: stint ? stint.stint_number - 1 : 0,
         speed: c?.speed ?? null, throttle: c?.throttle ?? null, brake: c?.brake ?? null, gear: c?.n_gear ?? null, rpm: c?.rpm ?? null, drs: (c?.drs ?? 0) >= 10, x: p?.x ?? null, y: p?.y ?? null, onTrack: !!p,

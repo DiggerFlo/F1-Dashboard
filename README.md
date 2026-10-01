@@ -33,6 +33,11 @@ URL-Parameter wählen die Quelle:
 
 Grenzen der OpenF1-Anbindung: Funk gibt es nur als Audio (kein Transkript), Qualifying zeigt die beste Runde statt getrennter Q1/Q2/Q3, die Rundenzahl des Rennens ist nicht bekannt, Wetter-Prognose und Fahrerwertung fehlen in der Vorschau. Die Anbindung wurde ohne Netzzugang entwickelt und ist nur durch Unit-Tests der Flaggen-Logik abgedeckt, nicht gegen die echte API geprüft.
 
+## Teamfarben und flüssige Bewegung
+
+- **Teamfarben:** Punkte auf der Karte, ein Balken neben dem Kürzel in den Tabellen und die Überholhinweise tragen die Teamfarbe. Die Demo nutzt erfundene Teams mit eigenen Farben, mit OpenF1 kommen die echten Farben aus `team_colour` (`color`/`team` im Fahrer-Zustand). Farben werden vor der Verwendung als `#rrggbb` geprüft. Der Leader hat zusätzlich einen roten Ring. Die Timing-Farben (Lila/Grün/Gelb) bleiben der Zeitenanzeige vorbehalten.
+- **Flüssige Bewegung:** Die Daten kommen nur alle 0,5 bis 2 s. Ein Animator (`createCarAnimator`) rechnet jede Position auf den Anteil der Runde um und fährt zwischen zwei Datenständen entlang der Strecke (nicht auf der Sehne, auch über die Ziellinie), 60 Bilder pro Sekunde. Die Anzeige läuft dadurch ein Update hinter den Daten her. Große Sprünge (Boxengasse, Neustart) werden nicht überblendet.
+
 ## Überholhinweise
 
 Wenn im Rennen ein Auto ein anderes überholt, fährt oben rechts ein kleiner Hinweis herein („MOR überholt KRN · P2“), maximal vier gleichzeitig, jeweils 5 Sekunden. Erkannt wird aus dem Vergleich zweier Zustände, also mit jeder Datenquelle. Nicht gemeldet werden Positionswechsel durch Boxenstopps, unter Safety Car/VSC/Rot, nach der Zielflagge und außerhalb des Rennens. Der Schalter „Überholungen an/aus“ in der Kopfzeile schaltet die Hinweise ab. Hinweise werden den Screenreadern vorgelesen (`aria-live`) und respektieren „Bewegung reduzieren“.
