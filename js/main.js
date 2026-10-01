@@ -1,4 +1,4 @@
-import { renderChrome, renderMain, renderSideHead } from './views.js';
+import { renderChrome, renderMain, renderSideHead, renderCalendar } from './views.js';
 import { createFeed } from './feed.js';
 import { createDemoSource } from './sources/demo.js';
 import { createOpenF1Source } from './sources/openf1.js';
@@ -18,7 +18,8 @@ const feed = createFeed({
   },
 });
 $('feedslot').replaceWith(feed.el);
-const ui = { sel: null, demo: false };
+const ui = { sel: null, demo: false, view: null, year: new Date().getFullYear(), cal: null, db: null };
+let lastKey = null, calDirty = true;
 const hist = new Map();
 let state = null;
 
@@ -26,6 +27,20 @@ const source = params.get('source') === 'openf1'
   ? createOpenF1Source({ token: params.get('token'), speed: Number(params.get('speed')) || 8, sessionKey: params.get('session'), wantType: params.get('type') })
   : createDemoSource({ scenario: params.get('scenario') || 'auto' });
 ui.demo = source.demo;
+
+fetch('data/circuits.json').then((r) => r.json()).then((db) => { ui.db = db; calDirty = true; render(); }).catch(() => {});
+
+async function loadCalendar() {
+  ui.cal = null; calDirty = true; render();
+  const year = ui.year;
+  try {
+    const cal = await source.calendar(year, ui.db || (await (await fetch('data/circuits.json')).json()));
+    if (ui.year === year) ui.cal = cal;
+  } catch (e) {
+    if (ui.year === year) ui.cal = { year, races: [], error: `Kalender konnte nicht geladen werden (${e.message}).` };
+  }
+  calDirty = true; render();
+}
 
 function remember(s) {
   for (const d of s.drivers) {
@@ -48,7 +63,10 @@ function render() {
   const top = state.drivers[0];
   const ref = top && top.num !== ui.sel ? hist.get(top.num) : null;
   $('chrome').innerHTML = renderChrome(state, ui);
-  $('mainc').innerHTML = renderMain(state, ui, hist, ref);
+  const key = ui.view || 'live';
+  if (key !== lastKey) { lastKey = key; calDirty = true; }
+  if (key === 'calendar') { if (calDirty) { $('mainc').innerHTML = renderCalendar(ui.cal, ui, ui.db); calDirty = false; } }
+  else $('mainc').innerHTML = renderMain(state, ui, hist, ref);
   $('sidehead').innerHTML = renderSideHead(state);
   $('sidefoot').textContent = state.sourceNote || '';
   feed.update(state.feed);
@@ -62,12 +80,22 @@ root.addEventListener('click', (e) => {
   const act = e.target.closest('[data-action]');
   if (act) {
     const a = act.dataset.action;
-    if (a === 'tab') source.select(act.dataset.type);
+    if (a === 'tab') {
+      if (act.dataset.type === 'calendar') { ui.view = 'calendar'; loadCalendar(); }
+      else { ui.view = null; source.select(act.dataset.type); render(); }
+    } else if (a === 'open-race') {
+      ui.view = null;
+      if (act.dataset.key) source.openRace(Number(act.dataset.key)); else source.openRace();
+      render();
+    }
     else if (a.startsWith('ev-')) source.trigger(a.slice(3));
     return;
   }
   const row = e.target.closest('tr[data-num]');
   if (row) { ui.sel = Number(row.dataset.num); render(); }
+});
+root.addEventListener('change', (e) => {
+  if (e.target.matches?.('[data-action="year"]')) { ui.year = Number(e.target.value); loadCalendar(); }
 });
 root.addEventListener('keydown', (e) => {
   if (e.key !== 'Enter' && e.key !== ' ') return;

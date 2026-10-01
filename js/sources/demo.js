@@ -4,6 +4,7 @@ import { sectorClass, clamp } from '../format.js';
 import { pointAt } from '../track.js';
 
 import { DEMO_TRACK } from './demo-track.js';
+import { buildDemoCalendar } from '../calendar.js';
 
 const POINTS = DEMO_TRACK.points;
 const SECTORS = [0, 0.34, 0.68]; // Sektorgrenzen der Simulation (Anteil der Runde)
@@ -288,5 +289,7 @@ export function createDemoSource(opts = {}) {
     stop() { clearInterval(timer); },
     select(type) { engine.setScenario(type === 'practice' ? 'race' : type === 'quali' ? 'quali' : type === 'upcoming' ? 'upcoming' : 'race'); },
     trigger(ev) { engine.trigger(ev); },
+    async calendar(year, db) { return { year, demo: true, races: buildDemoCalendar(db, year) }; },
+    openRace() { engine.setScenario('race'); },
   };
 }

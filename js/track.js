@@ -116,3 +116,13 @@ export function tracesSvg(hist, ref) {
   s += `<text x="4" y="14" font-family="JetBrains Mono" font-size="10" fill="#9a9aa6">320 km/h</text><text x="${W - 4}" y="214" text-anchor="end" font-family="JetBrains Mono" font-size="10" fill="#9a9aa6">jetzt</text></svg>`;
   return s;
 }
+
+/** Kleine Strecken-Vorschau (z. B. im Kalender). */
+export function miniTrackSvg(points, rotate = 0, label = '') {
+  const rot = rotator(points, rotate);
+  const pts = points.map(rot);
+  const b = bbox(pts);
+  const pad = 12;
+  const w = b.maxX - b.minX + pad * 2, h = b.maxY - b.minY + pad * 2;
+  return `<svg viewBox="${b.minX - pad} ${b.minY - pad} ${w} ${h}" role="img" aria-label="${esc(label)}"><polygon points="${pts.map((p) => p.map((v) => v.toFixed(1)).join(',')).join(' ')}" fill="none" stroke="#9a9aa6" stroke-width="7" stroke-linejoin="round"/></svg>`;
+}

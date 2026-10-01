@@ -2,6 +2,7 @@
 // und werden als Wiederholung abgespielt; Live-Daten während einer Session brauchen ein Token.
 import { sectorClass } from '../format.js';
 import { findLayout } from '../circuits.js';
+import { buildOpenF1Calendar } from '../calendar.js';
 import { samplePath } from '../svgpath.js';
 import { fitSimilarity } from '../fit.js';
 
@@ -62,19 +63,26 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
   async function chooseSession() {
     const year = new Date().getFullYear();
     let list = await get(`sessions?year=${year}`);
+    let chosen = null;
+    if (sessionKey) {
+      chosen = (await get(`sessions?session_key=${sessionKey}`))[0] || null;
+      if (chosen && !list.some((s) => s.session_key === chosen.session_key)) list = [...list, chosen];
+    }
     if (!list.length) list = await get(`sessions?year=${year - 1}`);
     list.sort((a, b) => Date.parse(a.date_start) - Date.parse(b.date_start));
     const now = Date.now();
     const live = list.find((s) => Date.parse(s.date_start) <= now && now <= Date.parse(s.date_end));
-    const next = list.find((s) => Date.parse(s.date_start) > now);
+    let next = list.find((s) => Date.parse(s.date_start) > now);
     const past = list.filter((s) => Date.parse(s.date_end) < now);
     let pick = null;
-    if (sessionKey) pick = list.find((s) => String(s.session_key) === String(sessionKey));
+    if (sessionKey) pick = chosen;
     else if (wantType === 'upcoming') pick = null;
     else if (wantType) pick = [...past].reverse().find((s) => sessionType(s.session_name) === wantType) || null;
     else pick = live || (next && Date.parse(next.date_start) - now < 4 * 86400000 ? null : past[past.length - 1]) || null;
+    if (pick && Date.parse(pick.date_start) > now) { next = pick; pick = null; } // gewähltes Rennen liegt in der Zukunft
     upcoming = next ? { startsAt: Date.parse(next.date_start), nextLabel: next.session_name, meeting: next.location || next.circuit_short_name, circuit: `${next.circuit_short_name || ''} · ${next.country_name || ''}`.trim() } : null;
-    upcoming = upcoming && { ...upcoming, schedule: list.filter((s) => s.meeting_key === next.meeting_key).map((s) => [s.session_name, new Date(s.date_start).toLocaleString('de-CH', { weekday: 'short', hour: '2-digit', minute: '2-digit' })]) };
+    const meetingSessions = next ? await get(`sessions?meeting_key=${next.meeting_key}`) : [];
+    upcoming = upcoming && { ...upcoming, schedule: meetingSessions.map((s) => [s.session_name, new Date(s.date_start).toLocaleString('de-CH', { weekday: 'short', hour: '2-digit', minute: '2-digit' })]) };
     session = pick;
     nextSession = next || null;
     if (session) {
@@ -218,7 +226,12 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
     id: 'openf1', demo: false,
     start(cb) { onState = cb; stopped = false; init(); },
     stop() { stopped = true; clearTimeout(timer); },
-    select(type) { wantType = type; session = null; track = null; lastSlow = 0; clearTimeout(timer); init(); },
+    async calendar(year) {
+      const [meetings, sessions] = await Promise.all([get(`meetings?year=${year}`), get(`sessions?year=${year}&session_name=Race`)]);
+      return { year, demo: false, races: buildOpenF1Calendar(meetings, sessions) };
+    },
+    openRace(key) { sessionKey = key; wantType = null; session = null; track = null; lastSlow = 0; clearTimeout(timer); init(); },
+    select(type) { sessionKey = null; wantType = type; session = null; track = null; lastSlow = 0; clearTimeout(timer); init(); },
     trigger() {},
   };
 }

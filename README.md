@@ -33,6 +33,10 @@ URL-Parameter wählen die Quelle:
 
 Grenzen der OpenF1-Anbindung: Funk gibt es nur als Audio (kein Transkript), Qualifying zeigt die beste Runde statt getrennter Q1/Q2/Q3, die Rundenzahl des Rennens ist nicht bekannt, Wetter-Prognose und Fahrerwertung fehlen in der Vorschau. Die Anbindung wurde ohne Netzzugang entwickelt und ist nur durch Unit-Tests der Flaggen-Logik abgedeckt, nicht gegen die echte API geprüft.
 
+## Rennkalender
+
+Tab **Kalender**: alle Rennen einer Saison als Karten mit Runde, Name, Ort, Datum, Streckenlayout und Status (beendet, live, nächstes Rennen). Die Saison wählst du im Dropdown (ab 2023, so weit reichen die OpenF1-Daten). Ein Klick auf ein Rennen öffnet es: bei OpenF1 als Wiederholung bzw. Live-Ansicht, bei einem zukünftigen Rennen als Vorschau mit Countdown. Im Demo-Modus zeigt der Kalender die Strecken des Jahres mit erfundenen Terminen.
+
 ## Streckenlayouts
 
 Die Karten nutzen die Layouts aus [julesr0y/f1-circuits-svg](https://github.com/julesr0y/f1-circuits-svg) (CC BY 4.0, Namensnennung in `data/ATTRIBUTION.md` und in der Seitenleiste). `data/circuits.json` enthält alle Layouts mit Einsatz ab 2012. Neu erzeugen: `node scripts/build-circuits.mjs <pfad-zum-checkout>`.
@@ -58,6 +62,7 @@ js/views.js                    alle Ansichten aus einem normalisierten Zustand
 js/track.js                    Streckenkarte und Telemetrie-Verlauf (SVG)
 js/svgpath.js, js/fit.js       SVG-Pfad -> Punkte, Anpassung der Positionsdaten ans Layout
 js/circuits.js                 Session -> Layout (Aliase, Saison)
+js/calendar.js                 Rennkalender aus OpenF1-Meetings/-Sessions bzw. Demo
 data/circuits.json             Layouts (generiert, CC BY 4.0)
 js/feed.js                     Seitenleiste: Audio, Dropdown, Transkripte
 js/transcribe.js               Transkriptions-Engines (lokal, OpenAI, Demo)

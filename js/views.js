@@ -1,5 +1,8 @@
 import { esc, fmtLap, fmtSector, fmtGap, fmtClock, splitCountdown } from './format.js';
-import { trackSvg, tracesSvg } from './track.js';
+import { trackSvg, tracesSvg, miniTrackSvg } from './track.js';
+import { findLayout } from './circuits.js';
+import { samplePath } from './svgpath.js';
+import { yearsFor } from './calendar.js';
 
 /*
  * Normalisiertes Zustandsmodell (siehe README), das jede Datenquelle liefert:
@@ -7,7 +10,7 @@ import { trackSvg, tracesSvg } from './track.js';
  *   flag:'green'|'yellow'|'sc'|'vsc'|'red'|'chequered', drivers:[...], feed:[...], weather, track, upcoming }
  */
 
-const TABS = [['upcoming', 'Vorschau'], ['race', 'Rennen'], ['quali', 'Qualifying'], ['practice', 'Training']];
+const TABS = [['upcoming', 'Vorschau'], ['race', 'Rennen'], ['quali', 'Qualifying'], ['practice', 'Training'], ['calendar', 'Kalender']];
 
 const tyre = (c) => {
   const k = (c || '?')[0].toLowerCase();
@@ -18,8 +21,8 @@ const sec = (v, c) => (c ? `<span class="${c}">${fmtSector(v)}</span>` : fmtSect
 const bar = (v, cls = '') => `<span class="bar ${cls}"><i style="width:${Math.round(v || 0)}%"></i></span>`;
 const kpi = (l, v, d, c = '') => `<div class="card kpi"><span class="label">${esc(l)}</span><span class="v mono">${esc(v)}</span><span class="d mono ${c}">${esc(d)}</span></div>`;
 
-function topbar(state) {
-  const type = state.session.type;
+function topbar(state, ui) {
+  const type = ui.view === 'calendar' ? 'calendar' : state.session.type;
   const tabs = TABS.map(([k, n]) => `<button class="tab${k === type ? ' on' : ''}" data-action="tab" data-type="${k}">${n}</button>`).join('');
   const f = state.flag;
   let dot = 'g', txt = 'Live';
@@ -158,7 +161,7 @@ function toolbar(ui) {
 
 /** Kopfzeile, Banner und Hauptbereich. Die Seitenleiste lebt dauerhaft in main.js (Audio/Dropdowns). */
 export function renderChrome(state, ui) {
-  return `${topbar(state)}${toolbar(ui)}${banner(state)}`;
+  return `${topbar(state, ui)}${toolbar(ui)}${ui.view === 'calendar' ? '' : banner(state)}`;
 }
 
 export function renderMain(state, ui, hist, ref) {
@@ -169,4 +172,40 @@ export function renderMain(state, ui, hist, ref) {
   return `<div class="hero"><div class="card map"><div class="sech"><span class="label">Streckenlayout · ${label}${state.session.lap ? ' · Runde ' + state.session.lap : ''}</span><span class="label">${esc(state.session.circuit || '')}</span></div>${trackSvg(state, ui.sel)}</div><div class="kpis">${kpisFor(state)}</div></div>
     <div class="sec"><div class="sech"><h3 class="disp">${ttl}</h3><span class="label">Zeile anklicken für Telemetrie</span></div><div class="tw">${timingTable(state, ui.sel)}</div></div>
     ${detail(state, ui.sel, hist, ref)}`;
+}
+
+const miniCache = new Map();
+function miniFor(db, race) {
+  const k = `${race.circuit}|${race.location}|${race.year}`;
+  if (miniCache.has(k)) return miniCache.get(k);
+  let svg = '';
+  const l = db && findLayout(db, { circuit_short_name: race.circuit, location: race.location, country_name: race.country, year: race.year }, race.year);
+  if (l) svg = miniTrackSvg(samplePath(l.d, 140), l.rotate, `Streckenlayout ${race.meeting}`);
+  miniCache.set(k, svg);
+  return svg;
+}
+
+const STATUS = { done: ['Beendet', ''], live: ['Live', 'live'], upcoming: ['Geplant', ''] };
+
+/** Rennkalender eines Jahres. cal = { year, races, demo } oder null während des Ladens. */
+export function renderCalendar(cal, ui, db) {
+  const years = yearsFor();
+  const opts = years.map((y) => `<option value="${y}"${y === ui.year ? ' selected' : ''}>${y}</option>`).join('');
+  const head = `<div class="sech"><h3 class="disp">Rennkalender</h3><label class="label" style="display:flex;gap:8px;align-items:center">Saison <select class="trsel" data-action="year" aria-label="Saison wählen">${opts}</select></label></div>`;
+  if (!cal) return `<div class="sec">${head}<div class="empty">Kalender wird geladen …</div></div>`;
+  if (cal.error) return `<div class="sec">${head}<div class="empty" role="alert">⚠ ${esc(cal.error)}</div></div>`;
+  if (!cal.races.length) return `<div class="sec">${head}<div class="empty">Keine Rennen für ${cal.year} gefunden.</div></div>`;
+  const done = cal.races.filter((r) => r.status === 'done').length;
+  const fmt = new Intl.DateTimeFormat('de-CH', { weekday: 'short', day: '2-digit', month: 'short' });
+  const cards = cal.races.map((r) => {
+    const [label, cls] = STATUS[r.status];
+    const nextTag = r.next && r.status !== 'live' ? '<span class="chip on">Nächstes Rennen</span>' : '';
+    const live = r.status === 'live' ? '<span class="chip live"><span class="dot red"></span>Live</span>' : r.status === 'done' ? `<span class="chip">${label}</span>` : '';
+    return `<button type="button" class="race${r.status === 'done' ? ' done' : ''}${r.next ? ' next' : ''}" data-action="open-race" data-key="${esc(r.key ?? '')}" data-circuit="${esc(r.circuit)}" aria-label="${esc(`Runde ${r.round}: ${r.meeting}, ${fmt.format(r.start)}`)}">
+      <span class="rn disp">${String(r.round).padStart(2, '0')}</span>
+      <span class="rt"><strong class="title">${esc(r.meeting)}</strong><span class="muted">${esc([r.location, r.country].filter(Boolean).join(' · '))}</span><span class="mono">${esc(fmt.format(r.start))}</span><span class="chips">${nextTag}${live}</span></span>
+      <span class="rm">${miniFor(db, r)}</span></button>`;
+  }).join('');
+  const note = cal.demo ? '<p class="fine" style="padding:0">Demo: Strecken des Jahres mit erfundenen Terminen, alle 14 Tage ab Mitte März. Echte Termine: ?source=openf1</p>' : '';
+  return `<div class="sec">${head}<p class="muted">${cal.races.length} Rennen · ${done} beendet</p><div class="cal">${cards}</div>${note}</div>`;
 }

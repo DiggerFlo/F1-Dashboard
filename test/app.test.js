@@ -7,7 +7,8 @@ import { readFileSync } from 'node:fs';
 import { samplePath } from '../js/svgpath.js';
 import { fitSimilarity } from '../js/fit.js';
 import { findLayout, seasonsInclude } from '../js/circuits.js';
-import { renderChrome, renderMain } from '../js/views.js';
+import { buildOpenF1Calendar, buildDemoCalendar, yearsFor, raceStatus } from '../js/calendar.js';
+import { renderChrome, renderMain, renderCalendar } from '../js/views.js';
 import { transcribe, audioUrl, enginesFor, _resetForTests } from '../js/transcribe.js';
 
 const run = (e, secs) => { for (let i = 0; i < secs * 2; i++) e.step(0.5); };
@@ -183,4 +184,34 @@ test('fit: recovers rotation, mirror, scale and offset of a track outline', () =
   // Kein Layout einer anderen Strecke passt
   const wrong = fitSimilarity(src, samplePath(DB.monza.layouts.at(-1).d, 240));
   assert.ok(wrong.error > fit.error * 2, 'falsches Layout wird schlechter bewertet');
+});
+
+test('calendar: OpenF1 meetings/sessions -> rounds, status, next race', () => {
+  const now = Date.parse('2025-06-10T12:00:00Z');
+  const sess = (k, m, name, start, end) => ({ session_key: k, meeting_key: m, session_name: name, date_start: start, date_end: end, location: `Ort${m}`, country_name: 'Land', circuit_short_name: `C${m}`, year: 2025 });
+  const sessions = [
+    sess(3, 3, 'Race', '2025-07-06T13:00:00Z', '2025-07-06T15:00:00Z'),
+    sess(1, 1, 'Race', '2025-03-16T04:00:00Z', '2025-03-16T06:00:00Z'),
+    sess(2, 2, 'Race', '2025-06-01T13:00:00Z', '2025-06-01T15:00:00Z'),
+    sess(9, 3, 'Qualifying', '2025-07-05T14:00:00Z', '2025-07-05T15:00:00Z'),
+    sess(8, 0, 'Race', '2025-02-01T00:00:00Z', '2025-02-01T01:00:00Z').constructor === Object ? sess(7, 4, 'Practice 1', '2025-03-01T00:00:00Z', '2025-03-01T01:00:00Z') : null,
+  ];
+  const meetings = [{ meeting_key: 1, meeting_name: 'Erster GP' }, { meeting_key: 2, meeting_name: 'Zweiter GP' }, { meeting_key: 3, meeting_name: 'Dritter GP' }];
+  const cal = buildOpenF1Calendar(meetings, sessions, now);
+  assert.deepEqual(cal.map((r) => [r.round, r.meeting, r.status, r.next]), [[1, 'Erster GP', 'done', false], [2, 'Zweiter GP', 'done', false], [3, 'Dritter GP', 'upcoming', true]]);
+  assert.equal(raceStatus(10, 20, 15), 'live');
+  assert.ok(yearsFor(Date.parse('2026-01-01')).join() === '2026,2025,2024,2023');
+});
+
+test('calendar: demo uses circuits of the season and renders cards', () => {
+  const cal = buildDemoCalendar(DB, 2025, Date.parse('2025-06-10T12:00:00Z'));
+  assert.ok(cal.length >= 20);
+  assert.equal(cal.filter((r) => r.next).length, 1);
+  assert.ok(!cal.some((r) => r.circuit === 'madring'), 'Madring fährt erst 2026');
+  assert.ok(buildDemoCalendar(DB, 2026).some((r) => r.circuit === 'madring'));
+  const html = renderCalendar({ year: 2025, demo: true, races: cal }, { year: 2025 }, DB);
+  assert.equal((html.match(/class="race/g) || []).length, cal.length);
+  assert.ok(html.includes('Nächstes Rennen') && html.includes('<polygon'));
+  assert.ok(renderCalendar(null, { year: 2025 }, DB).includes('geladen'));
+  assert.ok(renderCalendar({ year: 2025, races: [], error: 'x <b>' }, { year: 2025 }, DB).includes('x &lt;b&gt;'));
 });
