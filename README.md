@@ -33,6 +33,12 @@ URL-Parameter wählen die Quelle:
 
 Grenzen der OpenF1-Anbindung: Funk gibt es nur als Audio (kein Transkript), Qualifying zeigt die beste Runde statt getrennter Q1/Q2/Q3, die Rundenzahl des Rennens ist nicht bekannt, Wetter-Prognose und Fahrerwertung fehlen in der Vorschau. Die Anbindung wurde ohne Netzzugang entwickelt und ist nur durch Unit-Tests der Flaggen-Logik abgedeckt, nicht gegen die echte API geprüft.
 
+## Überholhinweise
+
+Wenn im Rennen ein Auto ein anderes überholt, fährt oben rechts ein kleiner Hinweis herein („MOR überholt KRN · P2“), maximal vier gleichzeitig, jeweils 5 Sekunden. Erkannt wird aus dem Vergleich zweier Zustände, also mit jeder Datenquelle. Nicht gemeldet werden Positionswechsel durch Boxenstopps, unter Safety Car/VSC/Rot, nach der Zielflagge und außerhalb des Rennens. Der Schalter „Überholungen an/aus“ in der Kopfzeile schaltet die Hinweise ab. Hinweise werden den Screenreadern vorgelesen (`aria-live`) und respektieren „Bewegung reduzieren“.
+
+Die Demo enthält dafür Tagesform und Windschatten (Überholungen im Rennen), ein Training als eigene Session, Boxenstopp-, Schnellste-Runde-, Strafen- und Wetter-Meldungen sowie einen Regen-Knopf.
+
 ## Rennkalender
 
 Tab **Kalender**: alle Rennen einer Saison als Karten mit Runde, Name, Ort, Datum, Streckenlayout und Status (beendet, live, nächstes Rennen). Die Saison wählst du im Dropdown (ab 2023, so weit reichen die OpenF1-Daten). Ein Klick auf ein Rennen öffnet es: bei OpenF1 als Wiederholung bzw. Live-Ansicht, bei einem zukünftigen Rennen als Vorschau mit Countdown. Im Demo-Modus zeigt der Kalender die Strecken des Jahres mit erfundenen Terminen.
@@ -64,6 +70,7 @@ js/svgpath.js, js/fit.js       SVG-Pfad -> Punkte, Anpassung der Positionsdaten 
 js/circuits.js                 Session -> Layout (Aliase, Saison)
 js/calendar.js                 Rennkalender aus OpenF1-Meetings/-Sessions bzw. Demo
 data/circuits.json             Layouts (generiert, CC BY 4.0)
+js/overtakes.js, js/toasts.js     Überholungen erkennen, Hinweise anzeigen
 js/feed.js                     Seitenleiste: Audio, Dropdown, Transkripte
 js/transcribe.js               Transkriptions-Engines (lokal, OpenAI, Demo)
 js/format.js                   Formatierung, Timing-Klassen, HTML-Escaping

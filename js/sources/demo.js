@@ -5,6 +5,7 @@ import { pointAt } from '../track.js';
 
 import { DEMO_TRACK } from './demo-track.js';
 import { buildDemoCalendar } from '../calendar.js';
+import { fmtLap } from '../format.js';
 
 const POINTS = DEMO_TRACK.points;
 const SECTORS = [0, 0.34, 0.68]; // Sektorgrenzen der Simulation (Anteil der Runde)
@@ -46,7 +47,7 @@ function speedProfile(f, num) {
 export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now() } = {}) {
   const rnd = mulberry32(seed);
   const baseNow = now;
-  let seq = 0, kind, simT, realT, flag, flagSince, feed, drivers, overall, remaining, upcomingEnd, autoIdx, weather, lastNow;
+  let seq = 0, bestLapAll = null, kind, simT, realT, flag, flagSince, feed, drivers, overall, remaining, upcomingEnd, autoIdx, weather, lastNow;
 
   const AUTO = [
     [0, () => setKind('race')], [40, () => trigger('sc')], [75, () => trigger('green')], [95, () => trigger('red')],
@@ -61,15 +62,15 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
   }
 
   function setKind(k) {
-    kind = k; simT = 0; flag = 'green'; flagSince = null; feed = []; overall = [null, null, null];
+    kind = k; simT = 0; flag = 'green'; flagSince = null; feed = []; overall = [null, null, null]; bestLapAll = null;
     weather = { air: 24, track: 38, rain: false };
     drivers = DRIVERS.map((_, i) => newDriver(i));
     if (k === 'race') {
       drivers.forEach((d, i) => { d.prog = 31 - i * 0.008; d.secStart = 0; });
-    } else if (k === 'quali') {
-      remaining = 900;
+    } else if (k === 'quali' || k === 'practice') {
+      remaining = k === 'quali' ? 900 : 3600;
       drivers.forEach((d, i) => {
-        d.onTrack = false; d.tyre = 'S'; d.tyreAge = 3; d.wait = Math.floor(rnd() * 30);
+        d.onTrack = false; d.tyre = k === 'quali' ? 'S' : ['S', 'M', 'H'][i % 3]; d.tyreAge = 3; d.wait = Math.floor(rnd() * 30);
         if (i < 16) { // Q2 läuft bereits: erste Zeiten stehen
           d.sectors = [28.2 + i * 0.03 + rnd() * 0.1, 31.1 + i * 0.05 + rnd() * 0.1, 28.1 + i * 0.04 + rnd() * 0.1];
           d.bestSec = [...d.sectors]; d.last = d.best = d.sectors[0] + d.sectors[1] + d.sectors[2];
@@ -92,6 +93,7 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
   function trigger(ev) {
     if (kind !== 'race') return;
     const prev = flag;
+    if (ev === 'rain') { weather.rain = !weather.rain; say('yellow', 'WETTER', weather.rain ? 'Regen auf der Strecke. Reifenwahl beachten.' : 'Regen hat aufgehört, Strecke trocknet ab.'); return; }
     if (ev === 'green') {
       if (prev === 'green') return;
       flag = 'green'; flagSince = null;
@@ -109,14 +111,14 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
 
   function refreshPositions() {
     const sorted = [...drivers];
-    if (kind === 'quali') {
+    if (kind === 'quali' || kind === 'practice') {
       sorted.sort((a, b) => (a.best ?? 1e9) - (b.best ?? 1e9) || a.num - b.num);
     } else {
       sorted.sort((a, b) => b.prog - a.prog);
     }
     sorted.forEach((d, i) => { d.pos = i + 1; });
     drivers = sorted;
-    if (kind === 'quali') {
+    if (kind === 'quali' || kind === 'practice') {
       const pole = drivers.find((d) => d.best != null)?.best;
       drivers.forEach((d) => { d.gap = d.best != null && pole != null ? d.best - pole : null; d.interval = d.gap; });
     } else if (kind === 'race') {
@@ -156,6 +158,10 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
     });
     d.sectorCls = d.sectors.map((v, k) => sectorClass(v, d.bestSec[k], overall[k]));
     if (flag === 'green' && (d.best == null || lap < d.best)) d.best = lap;
+    if (kind === 'race' && flag === 'green' && (bestLapAll == null || lap < bestLapAll)) {
+      if (bestLapAll != null) say('', 'SCHNELLSTE', `Schnellste Runde: ${d.code} ${fmtLap(lap)}`);
+      bestLapAll = lap;
+    }
     d.secT = [];
     d.tyreAge++;
   }
@@ -178,7 +184,12 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
     sorted.forEach((d, i) => {
       if (flag === 'red') { telemetry(d); return; }
       const lapTime = BASE_LAP + d.skill;
-      let rate = (1 / lapTime) * (1 + (rnd() - 0.5) * 0.012);
+      // Tagesform (langsame Schwankung) und Windschatten/DRS hinter dem Vordermann erzeugen Überholmanöver
+      const ahead0 = sorted[i - 1];
+      const gapAhead = ahead0 ? (ahead0.prog - d.prog) * lapTime : 99;
+      const form = 0.013 * Math.sin(simT / 25 + d.num * 1.7);
+      const draft = flag === 'green' && gapAhead < 1.0 ? 0.013 : 0;
+      let rate = (1 / lapTime) * (1 + form + draft + (rnd() - 0.5) * 0.006);
       if (flag === 'sc' || flag === 'vsc') {
         const ahead = sorted[i - 1];
         const gap = ahead ? ahead.prog - d.prog : 1;
@@ -186,7 +197,7 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
         if (ahead && gap < GAP_SC * 0.5) rate = 0.3 / lapTime;
       }
       if (d.pit > 0) { rate *= 0.35; d.pit -= dt; if (d.pit <= 0) { d.pit = 0; } }
-      else if (flag === 'green' && d.tyreAge > 20 && rnd() < 0.002 * dt && d.stops < 2) { d.pit = 20; d.stops++; d.tyre = d.tyre === 'S' ? 'M' : 'H'; d.tyreAge = 0; }
+      else if (flag === 'green' && d.tyreAge > 20 && rnd() < 0.002 * dt && d.stops < 2) { d.pit = 20; d.stops++; d.tyre = d.tyre === 'S' ? 'M' : 'H'; d.tyreAge = 0; say('', 'BOX', `${d.code} in der Box: Stopp ${d.stops}, neue ${d.tyre === 'M' ? 'Medium' : 'Hard'}-Reifen`); }
       else if (flag === 'sc' && d.tyreAge > 12 && d.stops < 2 && rnd() < 0.01 * dt) { d.pit = 20; d.stops++; d.tyre = 'H'; d.tyreAge = 0; }
       advanceDriver(d, dt, rate);
       telemetry(d);
@@ -229,11 +240,16 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
     }
     if (kind === 'race') {
       stepRace(dt);
+      if (flag === 'green' && rnd() < 0.004 * dtReal) {
+        const v = drivers[Math.floor(rnd() * drivers.length)];
+        say('yellow', 'STRAFE', `Fahrzeug ${v.num} (${v.code}): 5 s Zeitstrafe wegen Verlassens der Strecke.`);
+      }
+      if (rnd() < 0.01 * dtReal) { weather.air = clamp(weather.air + (rnd() - 0.5), 21, 28); weather.track = clamp(weather.track + (rnd() - 0.5) * 2, 32, 44); }
       if (flag === 'green' && rnd() < 0.05 * dtReal) {
         const d = drivers[Math.floor(rnd() * 8)]; const r = RADIO[Math.floor(rnd() * RADIO.length)];
         radio(d.code, r[0], r[1]);
       }
-    } else if (kind === 'quali') {
+    } else if (kind === 'quali' || kind === 'practice') {
       stepQuali(dt);
       if (rnd() < 0.04 * dtReal) { const d = drivers[Math.floor(rnd() * 10)]; radio(d.code, 'TEAM', 'Verkehr in Kurve 4, ich musste aufmachen.'); }
     }
@@ -244,7 +260,7 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
   function state() {
     const base = {
       now: nowMs(), flag, sourceNote: 'Simulierte Demo-Daten. Echte Daten: ?source=openf1 · Streckenlayouts: julesr0y/f1-circuits-svg (CC BY 4.0)',
-      weather, track: { points: POINTS, rotate: DEMO_TRACK.rotate }, feed: [...feed],
+      weather: { air: Math.round(weather.air), track: Math.round(weather.track), rain: weather.rain }, track: { points: POINTS, rotate: DEMO_TRACK.rotate }, feed: [...feed],
     };
     if (kind === 'upcoming') {
       return { ...base, flag: 'green', session: { type: 'upcoming', name: 'Rennen', meeting: 'Großer Preis von Italien (Demo)', circuit: 'Autodromo Nazionale Monza', startsAt: upcomingEnd }, drivers: [],
@@ -258,8 +274,10 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
     const leader = drivers[0];
     const session = kind === 'race'
       ? { type: 'race', name: 'Rennen', circuit: 'Autodromo Nazionale Monza', lap: Math.min(TOTAL_LAPS, Math.floor(leader.prog)), totalLaps: TOTAL_LAPS, flagSince }
-      : { type: 'quali', name: 'Q2', circuit: 'Autodromo Nazionale Monza', remaining, cutoff: 10, flagSince };
-    const out = { ...base, session, drivers: drivers.map((d) => ({ ...d, onTrack: kind === 'quali' ? d.onTrack : true })) };
+      : kind === 'practice'
+        ? { type: 'practice', name: 'Training 2', circuit: 'Autodromo Nazionale Monza', remaining, cutoff: null, flagSince }
+        : { type: 'quali', name: 'Q2', circuit: 'Autodromo Nazionale Monza', remaining, cutoff: 10, flagSince };
+    const out = { ...base, session, drivers: drivers.map((d) => ({ ...d, onTrack: kind === 'quali' || kind === 'practice' ? d.onTrack : true })) };
     if (flag === 'sc') { const [x, y] = pointAt(POINTS, leader.prog + 0.03); out.safetyCar = { x, y }; }
     return out;
   }
@@ -287,7 +305,7 @@ export function createDemoSource(opts = {}) {
       timer = setInterval(() => { engine.step(tickMs / 1000); push(); }, tickMs);
     },
     stop() { clearInterval(timer); },
-    select(type) { engine.setScenario(type === 'practice' ? 'race' : type === 'quali' ? 'quali' : type === 'upcoming' ? 'upcoming' : 'race'); },
+    select(type) { engine.setScenario(['practice', 'quali', 'upcoming'].includes(type) ? type : 'race'); },
     trigger(ev) { engine.trigger(ev); },
     async calendar(year, db) { return { year, demo: true, races: buildDemoCalendar(db, year) }; },
     openRace() { engine.setScenario('race'); },

@@ -8,6 +8,7 @@ import { samplePath } from '../js/svgpath.js';
 import { fitSimilarity } from '../js/fit.js';
 import { findLayout, seasonsInclude } from '../js/circuits.js';
 import { buildOpenF1Calendar, buildDemoCalendar, yearsFor, raceStatus } from '../js/calendar.js';
+import { detectOvertakes } from '../js/overtakes.js';
 import { renderChrome, renderMain, renderCalendar } from '../js/views.js';
 import { transcribe, audioUrl, enginesFor, _resetForTests } from '../js/transcribe.js';
 
@@ -214,4 +215,54 @@ test('calendar: demo uses circuits of the season and renders cards', () => {
   assert.ok(html.includes('Nächstes Rennen') && html.includes('<polygon'));
   assert.ok(renderCalendar(null, { year: 2025 }, DB).includes('geladen'));
   assert.ok(renderCalendar({ year: 2025, races: [], error: 'x <b>' }, { year: 2025 }, DB).includes('x &lt;b&gt;'));
+});
+
+const snap = (order, extra = {}) => ({ flag: 'green', session: { type: 'race' }, drivers: order.map((code, i) => ({ num: code.charCodeAt(0), code, pos: i + 1, pit: 0, ...(extra[code] || {}) })) });
+
+test('overtakes: detects who passes whom', () => {
+  assert.deepEqual(detectOvertakes(snap(['AAA', 'BBB', 'CCC']), snap(['BBB', 'AAA', 'CCC'])), [{ by: 'BBB', over: 'AAA', pos: 1 }]);
+  // Auto gewinnt zwei Plätze: zwei Überholte
+  const two = detectOvertakes(snap(['AAA', 'BBB', 'CCC']), snap(['CCC', 'AAA', 'BBB']));
+  assert.deepEqual(two.map((o) => `${o.by}>${o.over}`).sort(), ['CCC>AAA', 'CCC>BBB']);
+  assert.deepEqual(detectOvertakes(snap(['AAA', 'BBB']), snap(['AAA', 'BBB'])), []);
+});
+
+test('overtakes: ignores pit stops, safety car, other sessions', () => {
+  const a = snap(['AAA', 'BBB', 'CCC']);
+  assert.deepEqual(detectOvertakes(a, snap(['BBB', 'AAA', 'CCC'], { AAA: { pit: 5 } })), []);
+  assert.deepEqual(detectOvertakes(snap(['AAA', 'BBB'], { AAA: { pit: 5 } }), snap(['BBB', 'AAA'])), []);
+  assert.deepEqual(detectOvertakes(a, { ...snap(['BBB', 'AAA', 'CCC']), flag: 'sc' }), []);
+  assert.deepEqual(detectOvertakes({ ...a, flag: 'red' }, snap(['BBB', 'AAA', 'CCC'])), []);
+  assert.deepEqual(detectOvertakes({ ...a, session: { type: 'quali' } }, { ...snap(['BBB', 'AAA', 'CCC']), session: { type: 'quali' } }), []);
+  assert.deepEqual(detectOvertakes(null, a), []);
+  const unknown = snap(['AAA', 'BBB']); unknown.drivers[1].pos = 99;
+  assert.deepEqual(detectOvertakes(snap(['AAA', 'BBB']), unknown), []);
+});
+
+test('demo race produces a plausible number of overtakes, none under safety car', () => {
+  const e = createDemoEngine({ scenario: 'race', seed: 11 });
+  let prev = e.state(), count = 0;
+  for (let i = 0; i < 400; i++) { e.step(0.5); const s = e.state(); count += detectOvertakes(prev, s).length; prev = s; } // 200 s echt = 20 Minuten Rennzeit
+  console.log('ÜBERHOLUNGEN', count);
+  assert.ok(count >= 3 && count <= 120, `Überholungen: ${count}`);
+  e.trigger('sc');
+  let sc = 0;
+  for (let i = 0; i < 100; i++) { e.step(0.5); const s = e.state(); sc += detectOvertakes(prev, s).length; prev = s; }
+  assert.equal(sc, 0);
+});
+
+test('demo has practice scenario, weather event and race-control extras', () => {
+  const p = createDemoEngine({ scenario: 'practice', seed: 2 });
+  for (let i = 0; i < 200; i++) p.step(0.5);
+  const ps = p.state();
+  assert.equal(ps.session.type, 'practice');
+  assert.ok(ps.session.remaining < 3600 && ps.drivers.some((d) => d.best != null));
+  assert.ok(renderMain(ps, { sel: 3 }, new Map(), null).includes('Trainingsergebnis'));
+  const e = createDemoEngine({ scenario: 'race', seed: 5 });
+  e.trigger('rain');
+  assert.equal(e.state().weather.rain, true);
+  assert.ok(e.state().feed.some((m) => m.tag === 'WETTER'));
+  const tags = new Set();
+  for (let i = 0; i < 4000; i++) { e.step(0.5); e.state().feed.slice(0, 3).forEach((m) => tags.add(m.tag)); }
+  assert.ok(tags.has('BOX') && tags.has('SCHNELLSTE'), [...tags].join());
 });

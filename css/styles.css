@@ -122,3 +122,14 @@ tr[data-num]{cursor:pointer}tr[data-num]:hover{background:#1e1e25}
 .chip.on{border-color:var(--ink);color:var(--ink)}
 .chip.live{border-color:var(--race-red);color:var(--ink)}
 @media (max-width:1000px){.race{grid-template-columns:40px minmax(0,1fr) 80px}}
+.toasts{font-family:"Inter",system-ui,sans-serif;color:var(--ink);line-height:20px;position:fixed;top:72px;right:16px;z-index:50;display:flex;flex-direction:column;gap:8px;width:min(300px,calc(100vw - 32px));pointer-events:none}
+.toast{display:flex;align-items:center;gap:10px;background:var(--surface-1);border:1px solid var(--line);box-shadow:inset 3px 0 0 var(--ink);padding:8px 12px;font-size:13px;animation:toast-in .25s ease-out}
+.toast .tx{flex-grow:1}
+.toast .ar{width:0;height:0;border:5px solid transparent;border-bottom:8px solid var(--ink);border-top:0;flex:none}
+.toast .code{font-size:16px}
+.toast.out{opacity:0;transform:translateX(24px);transition:opacity .3s,transform .3s}
+@keyframes toast-in{from{opacity:0;transform:translateX(48px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){.toast{animation:none}.toast.out{transition:none}}
+.hint{background:none;border:1px solid var(--line);color:var(--ink-muted);border-radius:2px;height:28px;padding:0 10px;font:600 11px Inter,sans-serif;letter-spacing:.06em;text-transform:uppercase;cursor:pointer}
+.hint[aria-pressed="true"]{color:var(--ink);border-color:var(--ink-muted)}
+.hint:focus-visible{outline:2px solid var(--ink);outline-offset:1px}

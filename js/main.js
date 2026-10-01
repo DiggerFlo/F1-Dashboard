@@ -1,5 +1,7 @@
 import { renderChrome, renderMain, renderSideHead, renderCalendar } from './views.js';
 import { createFeed } from './feed.js';
+import { detectOvertakes } from './overtakes.js';
+import { createToasts } from './toasts.js';
 import { createDemoSource } from './sources/demo.js';
 import { createOpenF1Source } from './sources/openf1.js';
 
@@ -18,7 +20,11 @@ const feed = createFeed({
   },
 });
 $('feedslot').replaceWith(feed.el);
-const ui = { sel: null, demo: false, view: null, year: new Date().getFullYear(), cal: null, db: null };
+const toasts = createToasts();
+document.body.appendChild(toasts.el);
+let prevState = null;
+const sessionId = (s) => `${s.session.type}|${s.session.name}|${s.session.circuit}`;
+const ui = { toasts: true, sel: null, demo: false, view: null, year: new Date().getFullYear(), cal: null, db: null };
 let lastKey = null, calDirty = true;
 const hist = new Map();
 let state = null;
@@ -88,6 +94,7 @@ root.addEventListener('click', (e) => {
       if (act.dataset.key) source.openRace(Number(act.dataset.key)); else source.openRace();
       render();
     }
+    else if (a === 'toggle-toasts') { ui.toasts = !ui.toasts; if (!ui.toasts) toasts.clear(); render(); }
     else if (a.startsWith('ev-')) source.trigger(a.slice(3));
     return;
   }
@@ -103,4 +110,8 @@ root.addEventListener('keydown', (e) => {
   if (row) { e.preventDefault(); ui.sel = Number(row.dataset.num); render(); }
 });
 
-source.start((s) => { state = s; remember(s); render(); });
+source.start((s) => {
+  if (prevState && sessionId(prevState) === sessionId(s) && ui.toasts) detectOvertakes(prevState, s).slice(0, 3).forEach((o) => toasts.show(o));
+  else toasts.clear();
+  prevState = s; state = s; remember(s); render();
+});
