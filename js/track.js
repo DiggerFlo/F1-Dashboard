@@ -275,9 +275,9 @@ export function trackSvg(state, selNum, pos = null) {
 }
 
 /** Telemetrie-Verlauf in drei Spuren (Geschwindigkeit, Gas, Bremse) aus einer Historie [{speed,throttle,brake}]. */
-export function tracesSvg(hist, ref, color = '#f5f5f3') {
+export function tracesSvg(hist, ref, color = '#f5f5f3', compact = false) {
   const c = safeColor(color) || '#f5f5f3';
-  const W = 560, H = 288, N = 80, L = 58, R = 8;
+  const W = compact ? 380 : 560, H = 288, N = compact ? 60 : 80, L = compact ? 48 : 58, R = 8; // compact: schmaler gezeichnet, damit die Schrift auf dem Handy lesbar bleibt
   const X = (i) => L + (i * (W - L - R)) / (N - 1);
   const h = hist.slice(-N), off = N - h.length; // neue Daten füllen von rechts
   const sy = (v) => 168 - (Math.min(350, Math.max(0, v)) / 350) * 150;

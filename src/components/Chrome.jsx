@@ -1,14 +1,25 @@
 import { useState } from 'react';
 import { Alert, Button, Dropdown, Menu, Segmented, Select, Slider, Spin } from 'antd';
-import { CaretRightFilled, GlobalOutlined, PauseOutlined, StepBackwardOutlined } from '@ant-design/icons';
+import { CalendarOutlined, CaretRightFilled, ClockCircleOutlined, FlagOutlined, GlobalOutlined, LockOutlined, PauseOutlined, StepBackwardOutlined, ThunderboltOutlined, ToolOutlined } from '@ant-design/icons';
 import { fmtClock } from '../../js/format.js';
 import { LANGS, setLang, t } from '../../js/i18n.js';
 import { sessionLabel } from '../../js/sessions.js';
+import { useWallNow } from '../useWallNow.js';
 import { flagUrl } from '../flags.js';
 import { useLang } from '../useLang.js';
 
 const TABS = ['upcoming', 'race', 'quali', 'practice', 'calendar'];
 const LANG_FLAG = { de: 'Germany', en: 'United Kingdom' };
+const TAB_ICON = { upcoming: <ClockCircleOutlined />, race: <FlagOutlined />, quali: <ThunderboltOutlined />, practice: <ToolOutlined />, calendar: <CalendarOutlined /> };
+// Ansichten, die Sessiondaten von OpenF1 brauchen (Vorschau und Kalender kommen auch ohne aus)
+const NEEDS_SESSION = new Set(['race', 'quali', 'practice']);
+/**
+ * Warum diese Ansichten gerade nicht verfügbar sind: 'live' (Sperre während einer Live-Session), 'down' (OpenF1 antwortet nicht) oder null.
+ * Gilt nur ohne Simulation und solange keine Session geladen ist (Vorschau-Zustand mit Meldung).
+ */
+const tabBlock = (state, ui) => (!ui.sim && state.session.type === 'upcoming' && (state.liveLock || state.problem) ? (state.liveLock ? 'live' : 'down') : null);
+const blockTip = (why) => t(why === 'live' ? 'nav.blockedLive' : 'nav.blockedDown');
+const activeTab = (state, ui) => (ui.view === 'calendar' ? 'calendar' : ui.pendingType || state.session.type);
 
 const Mark = () => (
   <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3h9a6 6 0 0 1 0 12H9v6H4V3Zm5 4v4h4a2 2 0 0 0 0-4H9Z" fill="currentColor" fillRule="evenodd" /><rect x="15" y="17" width="5" height="4" fill="#e8112d" /></svg>
@@ -42,18 +53,34 @@ function LangMenu() {
 }
 
 function Topbar({ state, ui, actions }) {
-  const type = ui.view === 'calendar' ? 'calendar' : ui.pendingType || state.session.type;
+  const type = activeTab(state, ui);
+  const why = tabBlock(state, ui);
   const { dot, txt } = statusOf(state);
   return (
     <header className="top">
       <a className="brand" href="./" aria-label={t('app.home')}><Mark /><span>Pitwall</span></a>
-      <Menu mode="horizontal" selectedKeys={[type]} items={TABS.map((key) => ({ key, label: t(`tab.${key}`) }))} onClick={({ key }) => actions.tab?.(key)} className="tabs" aria-label={t('nav.view')} />
+      <Menu mode="horizontal" selectedKeys={[type]} items={TABS.map((key) => (why && NEEDS_SESSION.has(key) ? { key, disabled: true, label: <span className="tabblocked" title={blockTip(why)}><LockOutlined />{t(`tab.${key}`)}</span> } : { key, label: t(`tab.${key}`) }))} onClick={({ key }) => actions.tab?.(key)} className="tabs" aria-label={t('nav.view')} />
       <div className="top-r">
         <Segmented size="small" className="srcsw" value={ui.demo ? 'demo' : 'openf1'} options={[{ value: 'demo', label: t('src.demo') }, { value: 'openf1', label: t('src.live') }]} onChange={(v) => actions.source?.(v)} aria-label={t('src.label')} />
         <LangMenu />
         <div className="status"><span className={`dot ${dot}`} />{txt}</div>
       </div>
     </header>
+  );
+}
+
+/** Navigation am unteren Rand auf kleinen Bildschirmen (die Tabs der Kopfzeile sind dort ausgeblendet). */
+function MobileNav({ state, ui, actions }) {
+  const type = activeTab(state, ui);
+  const why = tabBlock(state, ui);
+  return (
+    <nav className="botnav" aria-label={t('nav.view')}>
+      {TABS.map((key) => (
+        <button key={key} type="button" className={key === type ? 'on' : ''} aria-current={key === type ? 'page' : undefined} disabled={!!why && NEEDS_SESSION.has(key)} title={why && NEEDS_SESSION.has(key) ? blockTip(why) : undefined} onClick={() => actions.tab?.(key)}>
+          {why && NEEDS_SESSION.has(key) ? <LockOutlined /> : TAB_ICON[key]}<span>{t(`tab.${key}`)}</span>
+        </button>
+      ))}
+    </nav>
   );
 }
 
@@ -73,6 +100,8 @@ const CarBadge = ({ t }) => <span className="bicon sbadge" aria-hidden="true">{t
 /** Statusbanner unter der Kopfzeile: je Zustand Farbe, Symbol, Titel und Hinweis, rechts Kacheln für Runde, Dauer und Wetter. */
 function Banner({ state }) {
   const s = state.session, w = state.weather;
+  const pre = s.type === 'upcoming' ? state.upcoming : null;
+  const wall = useWallNow(state.now, !!pre); // Vorschau: erkennt den Start auch zwischen zwei Datenständen
   const lapTxt = s.lap ? `${s.lap}${s.totalLaps ? '/' + s.totalLaps : ''}` : '';
   const since = s.flagSince ? fmtClock((state.now - s.flagSince) / 1000) : '';
   const timed = (s.type === 'quali' || s.type === 'practice') && s.remaining != null;
@@ -85,7 +114,8 @@ function Banner({ state }) {
     case 'red': st = { cls: 'rd', icon: <FlagIcon />, title: t('banner.red.title'), sub: t('banner.red.sub'), since }; break;
     case 'chequered': st = { cls: 'ch', icon: <ChequeredIcon />, title: t('banner.chequered.title'), sub: t('banner.chequered.sub') }; break;
     default:
-      if (up) st = { cls: '', icon: <span className="dot" />, title: t('status.next'), sub: '' };
+      if (up && pre?.startsAt != null && wall >= pre.startsAt) st = { cls: 'go', icon: <FlagIcon />, title: t('banner.live.title'), sub: sessionLabel(pre.nextLabel), since: fmtClock((wall - pre.startsAt) / 1000) };
+      else if (up) st = { cls: '', icon: <span className="dot" />, title: t('status.next'), sub: '' };
       else if (w?.rain) st = { cls: 'rn', icon: <RainIcon />, title: t('banner.rain.title'), sub: timed ? t('banner.remaining', { time: fmtClock(s.remaining) }) : t('banner.rain.sub') };
       else st = { cls: 'go', icon: <FlagIcon />, title: t('banner.green.title'), sub: timed ? t('banner.remaining', { time: fmtClock(s.remaining) }) : t('banner.green.sub') };
   }
@@ -161,6 +191,21 @@ function ReplayBar({ replay, session, seasons, actions }) {
   );
 }
 
+/** Deutlicher Hinweis: Eine echte Live-Session läuft, OpenF1 ist für alle ohne Zugangsschlüssel gesperrt. */
+function LiveLock({ lock }) {
+  const simHref = () => { try { const p = new URLSearchParams(location.search); p.set('source', 'sim'); return `?${p}`; } catch { return '?source=sim'; } };
+  return (
+    <div className="livelock" role="alert">
+      <span className="llbadge"><i />LIVE</span>
+      <div className="lltext">
+        <strong>{t('src.liveSession.title')}</strong>
+        <p>{t('src.liveSession.text', { session: sessionLabel(lock.name), meeting: lock.meeting })} {t('src.liveSession.keep')}</p>
+        <a className="lllink" href={simHref()}>{t('src.liveSession.simLink')} →</a>
+      </div>
+    </div>
+  );
+}
+
 /** Kopfzeile, Hinweise, Banner. */
 export function Chrome({ state, ui, actions = {} }) {
   return (
@@ -168,8 +213,9 @@ export function Chrome({ state, ui, actions = {} }) {
       <h1 className="sr-only">{t('app.title')}</h1>
       <Topbar state={state} ui={ui} actions={actions} />
       {ui.view === 'calendar' ? null : state.replay ? <ReplayBar replay={state.replay} session={state.session} seasons={ui.seasons} actions={actions} /> : ui.sim && <DemoToolbar actions={actions} />}
-      {state.problem && <Alert className="problem" type="warning" showIcon banner role="alert" message={state.problem} />}
+      {state.liveLock ? <LiveLock lock={state.liveLock} /> : state.problem && <Alert className="problem" type="warning" showIcon banner role="alert" message={state.problem} />}
       {ui.view !== 'calendar' && <Banner state={state} />}
+      <MobileNav state={state} ui={ui} actions={actions} />
     </>
   );
 }

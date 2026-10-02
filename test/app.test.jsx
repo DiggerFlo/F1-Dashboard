@@ -7,7 +7,6 @@ import { detectRetirements } from '../js/pitstops.js';
 import { createDemoEngine, createDemoSource } from '../js/sources/demo.js';
 import { flagFromControl, overtakeFromControl, latestBy, mergeUpcoming, createOpenF1Client, createOpenF1Source } from '../js/sources/openf1.js';
 import { createReplayBuffer, lastAtOrBefore } from '../js/sources/replay-buffer.js';
-import { createReplayDemoSource } from '../js/sources/replay-demo.js';
 import { mapDriverStandings, mapConstructorStandings, mapRaces, mapLastResult, buildJolpicaCalendar, createJolpica } from '../js/sources/jolpica.js';
 import { fmtLap, fmtGap, fmtClock, sectorClass, esc, splitCountdown } from '../js/format.js';
 import { readFileSync } from 'node:fs';
@@ -584,17 +583,6 @@ test('replay source: plays a past race from bulk-loaded data without per-tick AP
   src.stop();
 });
 
-test('replay demo falls back to the simulation when OpenF1 cannot be reached', async () => {
-  const jolpica = { races: async () => [], driverStandings: async () => [], constructorStandings: async () => [], lastResult: async () => null };
-  const src = createReplayDemoSource({ client: async () => { throw new Error('OpenF1 429'); }, jolpica, failAfter: 150 });
-  const states = [];
-  src.start((s) => states.push(s));
-  await waitFor(() => src.sim && states.some((s) => s.drivers.length === 20), 3000);
-  assert.ok(states.at(-1).problem.includes('simulierten'));
-  assert.equal(src.demo, true);
-  src.stop();
-});
-
 test('chrome: replay bar offers a race dropdown with replayable races only', () => {
   const st = createDemoEngine({ scenario: 'race', seed: 1 }).state();
   const replay = { start: 0, end: 7200000, t: 600000, speed: 2, paused: false, loading: false };
@@ -949,4 +937,110 @@ test('i18n: session names, race control headlines and demo texts follow the lang
     assert.deepEqual(up.schedule.map((x) => x[1])[0], 'Fri 11:30');
     assert.equal(i18n.tl(up.facts[0][0]), 'Lap length');
   } finally { i18n.setLang('de', { persist: false }); }
+});
+
+test('live session lock: detected from the race calendar, shown as a clear notice', async () => {
+  const { liveSessionNow, looksLikeBlock } = await import('../js/livelock.js');
+  const i18n = await import('../js/i18n.js');
+  const MIN = 60000, now = Date.UTC(2026, 9, 2, 9, 0);
+  const races = [{ meeting: 'Malaysia GP', sessions: [['Training 1', now - 30 * MIN], ['Training 2', now + 4 * 3600000], ['Qualifying', now + 26 * 3600000], ['Rennen', now + 50 * 3600000]] }];
+  assert.deepEqual(liveSessionNow(races, now), { name: 'Training 1', meeting: 'Malaysia GP' }, 'Training läuft seit 30 min');
+  assert.equal(liveSessionNow(races, now + 100 * MIN), null, 'Training 1 ist 100 min später (60 min + 20 min Nachlauf) vorbei');
+  assert.ok(liveSessionNow(races, now + 4 * 3600000 - 3 * MIN), 'kurz vor dem Start zählt schon');
+  assert.equal(liveSessionNow([], now), null);
+  assert.ok(looksLikeBlock('Failed to fetch') && looksLikeBlock('OpenF1 401') && !looksLikeBlock('OpenF1 500'));
+
+  // Quelle: alle Anfragen scheitern wie bei der Sperre (Browser: TypeError), Kalender kommt von Jolpica
+  const jolpica = { races: async () => races.map((r) => ({ ...r, start: now, end: now + 2 * 3600000 })), driverStandings: async () => [], constructorStandings: async () => [], lastResult: async () => null };
+  const src = createOpenF1Source({ client: async () => { throw new TypeError('Failed to fetch'); }, jolpica, replayOnly: true });
+  const states = [];
+  const realNow = Date.now; Date.now = () => now; // "jetzt" liegt in Training 1
+  try {
+    src.start((s) => states.push(s));
+    await waitFor(() => states.some((s) => s.liveLock));
+    const s = states.find((x) => x.liveLock);
+    assert.equal(s.liveLock.meeting, 'Malaysia GP');
+    assert.ok(s.problem.includes('Live-Session') && s.problem.includes('Malaysia GP') && !s.problem.includes('Failed to fetch'));
+    const ui = { sim: false, sel: 1 };
+    assert.ok(chrome(s, ui).includes('Live-Session läuft') && chrome(s, ui).includes('class="livelock"'));
+    assert.ok(chrome(s, ui).includes('Zur Demo (Simulation) wechseln') && chrome(s, ui).includes('source=sim'), 'Link zur Demo');
+    i18n.setLang('en', { persist: false });
+    assert.ok(chrome(s, ui).includes('Live session in progress') && chrome(s, ui).includes('Practice 1'));
+  } finally { Date.now = realNow; i18n.setLang('de', { persist: false }); src.stop(); }
+});
+
+test('without a running session a network error stays the generic hint', async () => {
+  const jolpica = { races: async () => [], driverStandings: async () => [], constructorStandings: async () => [], lastResult: async () => null };
+  const src = createOpenF1Source({ client: async () => { throw new TypeError('Failed to fetch'); }, jolpica, replayOnly: true });
+  const states = [];
+  src.start((s) => states.push(s));
+  await waitFor(() => states.some((s) => s.problem));
+  const s = states.find((x) => x.problem);
+  assert.equal(s.liveLock, undefined);
+  assert.ok(s.problem.includes('nicht erreichbar') && s.problem.includes('Failed to fetch'));
+  src.stop();
+});
+
+test('live lock: the real preview (schedule from Jolpica) is shown and nothing switches to the simulation on its own', async () => {
+  const MIN = 60000, now = Date.UTC(2026, 9, 2, 9, 0);
+  const races = [{ key: null, jolpica: true, round: 16, meeting: 'Malaysia GP', circuitName: 'Sepang', circuit: 'sepang', location: 'Kuala Lumpur', country: 'Malaysia', year: 2026, start: now + 50 * 3600000, end: now + 52 * 3600000,
+    sessions: [['Training 1', now - 30 * MIN], ['Training 2', now + 4 * 3600000], ['Qualifying', now + 26 * 3600000], ['Rennen', now + 50 * 3600000]] }];
+  const jolpica = { races: async () => races, driverStandings: async () => [{ pos: 1, code: 'NOR', points: 300, wins: 5 }], constructorStandings: async () => [], lastResult: async () => null };
+  const realNow = Date.now; Date.now = () => now;
+  const src = createOpenF1Source({ client: async () => { throw new TypeError('Failed to fetch'); }, jolpica });
+  const states = [];
+  try {
+    src.start((s) => states.push(s));
+    await waitFor(() => states.some((s) => s.liveLock));
+    await new Promise((r) => setTimeout(r, 400));
+    assert.equal(src.sim, false, 'bleibt bei der echten Vorschau');
+    const s = states.at(-1);
+    assert.equal(s.session.type, 'upcoming');
+    assert.equal(s.upcoming.meeting, 'Malaysia GP');
+    assert.equal(s.upcoming.schedule.length, 4, 'Wochenendplan aus Jolpica');
+    assert.equal(s.upcoming.nextLabel, 'Training 1', 'laufende Session des Wochenendes');
+    assert.equal(s.upcoming.standings[0].code, 'NOR', 'Wertung aus Jolpica');
+    assert.ok(s.liveLock && s.problem.includes('Live-Session'));
+  } finally { Date.now = realNow; src.stop(); }
+});
+
+test('countdown: tiles before the start, live panel after it, session focus follows the schedule', async () => {
+  const { Countdown } = await import('../src/components/Countdown.jsx');
+  const { focusSession, plannedMinutes } = await import('../js/livelock.js');
+  const MIN = 60000, now = Date.UTC(2026, 9, 3, 4, 0);
+  const before = html(<Countdown startsAt={now + 90061000} now={now} label="Training 1" />);
+  assert.ok(before.includes('role="timer"') && before.includes('class="cdc"') && !before.includes('livepanel'));
+  assert.ok(before.includes('<span class="v">01</span>'), 'ein Tag, eine Stunde, eine Minute, eine Sekunde');
+  const after = html(<Countdown startsAt={now - 5 * MIN} now={now} label="Training 1" />);
+  assert.ok(after.includes('livepanel') && after.includes('Training 1 läuft') && after.includes('seit 05:00') && after.includes('geplant 60 min'));
+  assert.ok(after.includes('aria-valuenow="8"'), '5 von 60 Minuten');
+  assert.equal(plannedMinutes('Rennen'), 120);
+  const plan = [['Training 1', now - 30 * MIN], ['Training 2', now + 4 * 3600000], ['Qualifying', now + 26 * 3600000]];
+  assert.deepEqual(focusSession(plan, now), { nextLabel: 'Training 1', startsAt: now - 30 * MIN, live: true });
+  assert.deepEqual(focusSession(plan, now + 2 * 3600000), { nextLabel: 'Training 2', startsAt: now + 4 * 3600000, live: false });
+  assert.deepEqual(focusSession(plan, now + 40 * 3600000), {}, 'nach dem letzten Eintrag gibt es keinen Fokus');
+  assert.deepEqual(focusSession([['Rennen', 'So 14:00']], now), {}, 'Text statt Zeitpunkt wird ignoriert');
+  // Banner: Vorschau nach dem Start zeigt die Flagge "Session läuft"
+  const up = { session: { type: 'upcoming' }, flag: 'green', now, drivers: [], track: null, upcoming: { startsAt: now - 2 * MIN, nextLabel: 'Training 1' } };
+  assert.ok(chrome(up, { sel: 1 }).includes('Session läuft') && chrome(up, { sel: 1 }).includes('02:00'));
+  const pre = { ...up, upcoming: { startsAt: now + 5 * MIN, nextLabel: 'Training 1' } };
+  assert.ok(!chrome(pre, { sel: 1 }).includes('Session läuft') && chrome(pre, { sel: 1 }).includes('Nächste Session'));
+});
+
+test('navigation: race, quali and practice are disabled while OpenF1 provides no session (not in the simulation)', async () => {
+  const i18n = await import('../js/i18n.js');
+  const base = { session: { type: 'upcoming' }, flag: 'green', now: 1, drivers: [], track: null, upcoming: {} };
+  const locked = { ...base, liveLock: { name: 'Training 1', meeting: 'X' }, problem: 'x' };
+  const out = chrome(locked, { sel: 1, sim: false });
+  assert.equal((out.match(/ant-menu-item-disabled/g) || []).length, 3, 'Rennen, Qualifying, Training');
+  assert.equal((out.match(/<button[^>]*disabled/g) || []).length, 3, 'auch in der unteren Navigationsleiste');
+  assert.ok(out.includes('wegen einer Live-Session gesperrt'));
+  const down = chrome({ ...base, problem: 'OpenF1 nicht erreichbar' }, { sel: 1, sim: false });
+  assert.equal((down.match(/ant-menu-item-disabled/g) || []).length, 3);
+  assert.ok(down.includes('OpenF1 antwortet nicht'));
+  // Simulation, normaler Betrieb und geladene Session: nichts gesperrt
+  assert.ok(!chrome(locked, { sel: 1, sim: true }).includes('ant-menu-item-disabled'), 'Simulation');
+  assert.ok(!chrome(base, { sel: 1, sim: false }).includes('ant-menu-item-disabled'), 'ohne Fehler');
+  assert.ok(!chrome({ ...base, session: { type: 'race' }, problem: 'x' }, { sel: 1, sim: false }).includes('ant-menu-item-disabled'), 'Session geladen, nur zeitweiser Fehler');
+  try { i18n.setLang('en', { persist: false }); assert.ok(chrome(locked, { sel: 1, sim: false }).includes('blocked because of a live session')); } finally { i18n.setLang('de', { persist: false }); }
 });

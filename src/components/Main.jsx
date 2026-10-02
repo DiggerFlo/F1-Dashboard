@@ -1,11 +1,14 @@
 import { Card, Table } from 'antd';
-import { fmtLap, fmtGap, fmtClock, splitCountdown, safeColor } from '../../js/format.js';
+import { fmtLap, fmtGap, fmtClock, safeColor } from '../../js/format.js';
 import { tracesSvg } from '../../js/track.js';
 import { teamColor } from '../../js/teams.js';
 import { fmtSecs, pitLossNote } from '../../js/pitstops.js';
 import { flagUrl, countryOf } from '../flags.js';
 import { t, tl, dec, locale } from '../../js/i18n.js';
 import { sessionLabel, sameSession } from '../../js/sessions.js';
+import { useNarrow } from '../useNarrow.js';
+import { useWallNow } from '../useWallNow.js';
+import { Countdown } from './Countdown.jsx';
 import { Html, Tyre, CodeCell, Sector, Bar, Badge, Kpi, Section, Swatch, Face } from './bits.jsx';
 import { StateMap } from './MapCard.jsx';
 
@@ -126,6 +129,7 @@ const Pedal = ({ label, v, cls }) => (
 );
 
 function Detail({ state, sel, hist, refHist }) {
+  const narrow = useNarrow();
   const d = state.drivers.find((x) => x.num === sel) || state.drivers[0];
   if (!d) return null;
   const h = hist.get(d.num) || [];
@@ -159,7 +163,7 @@ function Detail({ state, sel, hist, refHist }) {
             <div className={`tt tmode${mode.on ? ' on' : ''}`}><span className="label">{mode.label}</span><span className="tv sm">{mode.value}</span>{mode.note && <span className="tnote mono">{mode.note}</span>}</div>
           </div>
           <Card className="traces">
-            <Html html={tracesSvg(h, isQ ? refHist : null, col)} />
+            <Html html={tracesSvg(h, isQ ? refHist : null, col, narrow)} />
             <div className="legend">
               <span><i style={{ background: col }} />{t('tele.speed')}</span><span><i style={{ background: 'rgba(245,245,243,.5)' }} />{t('tele.throttle')}</span>
               <span><i style={{ background: 'var(--race-red)' }} />{t('tele.brake')}</span>
@@ -195,8 +199,7 @@ export function Top5({ state, sel, onPick }) {
 
 function Upcoming({ state, ui, actions }) {
   const u = state.upcoming || {};
-  const cd = splitCountdown((u.startsAt - state.now) / 1000);
-  const cell = (v, l) => <div key={l} className="cdc"><span className="v">{String(v).padStart(2, '0')}</span><span className="label">{l}</span></div>;
+  const wall = useWallNow(state.now, true); // Countdown zählt zwischen den Datenständen weiter
   const live = new Map(state.drivers.map((d) => [d.code, d.color]));
   const colorOf = (code) => live.get(code) || null; // sonst leitet Swatch die Farbe aus dem Teamnamen ab
   const standings = u.standings || [];
@@ -218,7 +221,7 @@ function Upcoming({ state, ui, actions }) {
           <span className="label eyebrow"><i />{nextName ? sessionLabel(nextName) : t('status.next')}</span>
           <h2 className="big">{u.meeting || '—'}</h2>
           <span className="muted where">{u.circuit || ''}</span>
-          <div className="cd" role="timer" aria-label={t('up.countdown')}>{cell(cd.d, t('up.days'))}{cell(cd.h, t('up.hours'))}{cell(cd.m, t('up.min'))}{cell(cd.s, t('up.sec'))}</div>
+          {u.startsAt != null && <Countdown startsAt={u.startsAt} now={wall} label={u.nextLabel} />}
           {(u.facts || []).length > 0 && <div className="facts">{u.facts.map(([l, v]) => <div key={l}><span className="label">{tl(l)}</span><div className="mono fact">{v}</div></div>)}</div>}
         </Card>
       </div>

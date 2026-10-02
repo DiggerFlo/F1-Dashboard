@@ -9,6 +9,8 @@ import { createJolpica, buildJolpicaCalendar } from './jolpica.js';
 import { createReplayBuffer } from './replay-buffer.js';
 import { createStaticCache, cacheKeyOf } from '../cache.js';
 import { t as tr, locale } from '../i18n.js';
+import { liveSessionNow, looksLikeBlock, focusSession } from '../livelock.js';
+import { sessionLabel } from '../sessions.js';
 import { nearestFraction, aheadOf } from '../track.js';
 import { sectorFlagsFrom, stationaryTime } from '../pit.js';
 
@@ -128,6 +130,9 @@ function sessionType(name = '') {
  * Fasst Vorschau-Daten aus OpenF1 (nächste Session) und Jolpica (Rennen, Wertungen) zusammen.
  * Jolpica-Details zum Rennwochenende werden nur genutzt, wenn sie zur nächsten OpenF1-Session passen.
  */
+/** Bei Fehler (z. B. Live-Sperre): Vorschau auf die laufende bzw. nächste Session des Wochenendes ausrichten, bei jedem Zustand neu. */
+const fallbackFocus = (u, errors) => (errors && u.schedule?.length ? { ...u, ...focusSession(u.schedule) } : u);
+
 /** Kennzahlen eines Rennwochenendes aus einem Jolpica-Rennen. */
 export function raceFacts(race, total = 0) {
   // Labels sind Schlüssel (fact.*), die Anzeige übersetzt sie; die Werte folgen der aktuellen Sprache
@@ -165,6 +170,7 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
   const windowLoads = new Map();
   if (replayOnly && !wantType && !sessionKey) wantType = 'race';
   let toTrack = (x, y) => [x, y], drivers = new Map(), carData = new Map(), loc = new Map(), pos = new Map(), intervals = new Map(), laps = [], stints = [], control = [], radioRows = [], weather = null, track = null;
+  let initFails = 0; // aufeinanderfolgende Fehlversuche beim Start einer Session: der Abstand zwischen den Versuchen wächst
   let epoch = 0, pickedRace = null, pickedMeta = null, lastMedium = 0, lastSlow = 0, lastFast = 0, errors = 0, noteMsg = '', layoutNote = false, nextSession = null, extras = null;
 
   const rawGet = client || createOpenF1Client({ headers: token ? { Authorization: `Bearer ${token}` } : {} });
@@ -222,6 +228,26 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
     const total = extras?.races?.length || 0;
     upcoming = { startsAt: r.start, nextLabel: r.end < Date.now() ? 'sess.raceDone' : 'sess.race', meeting: r.meeting, circuit: `${r.circuitName || r.circuit} · ${r.country}`,
       schedule: (r.sessions || []).map(([n, ts]) => [n, ts]), get facts() { return raceFacts(r, total); } }; // facts als Getter: folgt der Sprache bei jedem Zustand
+  }
+
+  /**
+   * OpenF1 antwortet nicht (z. B. Sperre während einer Live-Session): Vorschau trotzdem zeigen. Zeitplan, Wertungen und letztes Ergebnis
+   * kommen von Jolpica, das Streckenlayout aus der lokalen Datei (kein OpenF1 nötig). Zählt bis zur nächsten Session des Wochenendes.
+   */
+  async function showFallbackPreview(my) {
+    const now = Date.now();
+    const r = extras?.races?.find((x) => x.end > now);
+    if (!r) return;
+    try {
+      previewRace(r);
+      const live = liveSessionNow([r], now); // laufende Session des Wochenendes, sonst die nächste
+      const nextSess = live ? (r.sessions || []).find(([n]) => n === live.name) : (r.sessions || []).find(([, ts]) => ts > now);
+      if (nextSess) { upcoming.nextLabel = nextSess[0]; upcoming.startsAt = nextSess[1]; }
+      const db = await (await fetch('data/circuits.json')).json();
+      if (my !== epoch) return;
+      const l = findLayout(db, nextSession, new Date(nextSession.date_start).getFullYear());
+      if (l) track = { points: samplePath(l.d, 300), rotate: l.rotate };
+    } catch { /* Vorschau ohne Layout */ }
   }
 
   async function chooseSession() {
@@ -395,9 +421,13 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
 
   function build() {
     const now = vnow();
-    const note = noteMsg ? tr('src.unreachable', { msg: noteMsg }) : ''; // Fehlertext in der aktuellen Sprache
+    // Fehlertext in der aktuellen Sprache. Netzwerk- und 401-Fehler deuten auf die Sperre während einer laufenden Session (der Browser meldet sie als CORS-Fehler):
+    // liegt jetzt laut Rennkalender eine Session im Gange, wird sie genannt (liveLock), sonst bleibt es beim allgemeinen Hinweis
+    const blocked = noteMsg && looksLikeBlock(noteMsg);
+    const liveLock = blocked ? liveSessionNow(extras?.races) : null;
+    const note = !noteMsg ? '' : liveLock ? tr('src.liveSession.text', { session: sessionLabel(liveLock.name), meeting: liveLock.meeting }) : tr('src.unreachable', { msg: noteMsg }) + (blocked ? ' ' + tr('src.liveLock') : '');
     if (!session) {
-      return { now: Date.now(), flag: 'green', session: { type: 'upcoming', startsAt: upcoming?.startsAt, meeting: upcoming?.meeting }, drivers: [], feed: [], track: track || { points: [] }, weather, upcoming: mergeUpcoming(upcoming, extras) || {}, problem: errors ? note : '', sourceNote: note || tr('src.note.idle') };
+      return { now: Date.now(), flag: 'green', session: { type: 'upcoming', startsAt: upcoming?.startsAt, meeting: upcoming?.meeting }, drivers: [], feed: [], track: track || { points: [] }, weather, upcoming: fallbackFocus(mergeUpcoming(upcoming, extras) || {}, errors), problem: errors ? note : '', liveLock: errors && liveLock ? liveLock : undefined, sourceNote: note || tr('src.note.idle') };
     }
     const type = sessionType(session.session_name);
     const ctl = replay ? control.filter((m) => Date.parse(m.date) <= now) : control;
@@ -462,7 +492,8 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
       safetyCar, sectorFlags: track?.marshal?.length ? sectorFlagsFrom(ctl) : undefined, pitStops, pitLoss: track?.pitLoss || null,
       now: replay ? now : Date.now(), flag, weather: wx, feed, track: track || { points: [] }, drivers: rows, overtake, upcoming: mergeUpcoming(upcoming, extras),
       problem: errors ? note : '',
-      sourceNote: (replay ? tr('src.note.replay', { who: replayOnly ? 'Demo' : 'OpenF1', speed: clock.speed, session: session.session_name, place: session.location }) : tr('src.note.live', { session: session.session_name, place: session.location })) + (layoutNote ? ' · ' + tr('src.note.layout') : '') + ' · ' + tr('src.note.credits'),
+      liveLock: errors && liveLock ? liveLock : undefined,
+      sourceNote: (replay ? tr('src.note.replay', { who: 'OpenF1', speed: clock.speed, session: session.session_name, place: session.location }) : tr('src.note.live', { session: session.session_name, place: session.location })) + (layoutNote ? ' · ' + tr('src.note.layout') : '') + ' · ' + tr('src.note.credits'),
       session: { key: session.session_key, type, name: session.session_name, circuit: session.circuit_short_name, lap: leaderLap || null, totalLaps: null, flagSince: since, phase: replay ? 'replay' : 'live', cutoff: type === 'quali' ? 10 : null,
         remaining: type === 'quali' ? Math.max(0, (Date.parse(session.date_end) - now) / 1000) : null },
       startLights: replay && raceStart() ? { startsAt: lightsOut(), now, speed: clock.paused || clock.hold ? 0 : clock.speed, per: Math.min(clock.speed, 4) } : undefined,
@@ -538,9 +569,12 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
     } catch (e) {
       if (my !== epoch) return;
       noteMsg = e.message; errors = 1;
-      if (!stopped) { onState(build()); timer = setTimeout(init, 5000); }
+      if (!session) await showFallbackPreview(my);
+      if (my !== epoch) return;
+      if (!stopped) { onState(build()); timer = setTimeout(init, Math.min(60000, 5000 * 2 ** Math.min(initFails++, 4))); } // 5, 10, 20, 40, dann 60 s
       return;
     }
+    initFails = 0;
     if (replay && session) tickReplay(my); else tick(my);
   }
 

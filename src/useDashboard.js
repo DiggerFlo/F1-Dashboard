@@ -4,7 +4,6 @@ import { detectPitStops, detectRetirements } from '../js/pitstops.js';
 import { eventsFrom } from '../js/events.js';
 import { createCarAnimator } from '../js/track.js';
 import { createDemoSource } from '../js/sources/demo.js';
-import { createReplayDemoSource } from '../js/sources/replay-demo.js';
 import { yearsFor } from '../js/calendar.js';
 import { createOpenF1Source } from '../js/sources/openf1.js';
 
@@ -13,13 +12,12 @@ const TAB_LABEL = { upcoming: 'tab.upcoming', race: 'tab.race', quali: 'tab.qual
 const DEFAULT_SHOW = { radio: true, rc: true, overtake: true, pit: true, dnf: true }; // was unter "Alle" in der Ereignisliste steht
 const PENDING_MAX_MS = 30000; // spätestens dann verschwindet die Ladeanzeige, auch wenn nie Daten der Zielansicht kommen
 
-/** ?source=openf1: Echtdaten (live, sonst Wiederholung) · ?source=sim: reine Simulation · sonst: Demo mit echten Renndaten (Wiederholung). */
+/** ?source=sim: Demo (Simulation) · sonst: Live-Daten aus OpenF1 (live mit Token, sonst Wiederholung der letzten Session bzw. Vorschau). */
 function makeSource(params) {
   const src = params.get('source');
   const common = { token: params.get('token'), sessionKey: params.get('session'), wantType: params.get('type') };
-  if (src === 'openf1') return createOpenF1Source({ ...common, speed: Number(params.get('speed')) || 8 });
   if (src === 'sim') return createDemoSource({ scenario: params.get('scenario') || 'auto' });
-  return createReplayDemoSource({ ...common, speed: Number(params.get('speed')) || 2, scenario: params.get('scenario') || 'auto' });
+  return createOpenF1Source({ ...common, speed: Number(params.get('speed')) || 2 });
 }
 
 /**
@@ -66,7 +64,7 @@ export function useDashboard() {
       const prev = core.current.prev;
       const same = prev && sessionId(prev) === sessionId(s);
       const pd = pendRef.current; // Zielansicht ist da, sobald Typ bzw. Session passen und nichts mehr lädt
-      if (pd && !s.replay?.loading && (pd.type ? s.session.type === pd.type : sessionId(s) !== pd.startId)) clearPending();
+      if (pd && (s.liveLock || s.problem || (!s.replay?.loading && (pd.type ? s.session.type === pd.type : sessionId(s) !== pd.startId)))) clearPending(); // auch bei Fehler/Sperre: die Zielansicht kommt so bald nicht
       // Sprünge in der Wiederholung (Spulen, Laden) sind keine Überholmanöver
       const jumped = s.replay && (s.replay.loading || prev?.replay?.loading || (prev?.replay && Math.abs(s.replay.t - prev.replay.t) > 3000 * Math.max(1, s.replay.speed)));
       if (same && !jumped && viewRef.current !== 'calendar') {
@@ -145,7 +143,7 @@ export function useDashboard() {
     replay: { pause: (f) => source.pause?.(f), speed: (v) => source.setSpeed?.(v), seek: (f) => source.seek?.(f) },
     source(id) {
       const p = new URLSearchParams(location.search);
-      if (id === 'openf1') p.set('source', 'openf1'); else p.delete('source');
+      if (id === 'demo') p.set('source', 'sim'); else p.delete('source'); // Demo = Simulation, Live-Daten (OpenF1) sind der Standard
       location.search = p.toString();
     },
   };

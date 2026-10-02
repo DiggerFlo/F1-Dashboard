@@ -37,14 +37,17 @@ Grenzen auf GitHub Pages: Es gibt keinen Server, der `/f1static/` weiterreicht (
 
 URL-Parameter wählen die Quelle:
 
-- **Demo (Standard)** – Wiederholung eines echten, beendeten Rennens mit Daten aus OpenF1: Telemetrie, Positionen, Abstände, Reifen, Funk (echte MP3), Race Control und Wetter. Die Daten werden beim Abspielen in Zeitfenstern von 4 Minuten in den Speicher geladen (nur temporär, nichts wird gespeichert) und lokal abgespielt, ein Fenster braucht nur vier API-Aufrufe für alle Fahrer. Oben stehen Pause, Tempo (1× bis 8×, `?speed=`) und eine Zeitleiste zum Springen. Ein Klick auf ein Rennen im Kalender spielt dieses Rennen ab, die Tabs Qualifying und Training die jeweilige Session. `?session=<session_key>` wählt gezielt eine Session. Ist OpenF1 nicht erreichbar, wechselt die Demo nach 30 s auf die Simulation.
-- **Simulation** – `?source=sim`: erfundene Daten mit Schaltflächen, um Flaggen selbst auszulösen (Grün, Gelb, Safety Car, VSC, Rot, Regen). `&scenario=race|quali|upcoming|auto`
-- **Echtdaten** – `?source=openf1` (Schalter „Echtdaten“ im Kopf):
-  - Läuft gerade eine Session, werden Live-Daten gezeigt (Abruf alle 2 s). Live-Zugriff braucht ein Token: `&token=…`
-  - Sonst wird die letzte Session wie in der Demo als Wiederholung abgespielt (`&speed=8`). `&session=<session_key>` oder `&type=race|quali|practice|upcoming` wählt gezielt.
+- **Live-Daten** (Standard, Schalter „Live-Daten“ im Kopf, `?source=openf1`) – echte Daten aus OpenF1:
+  - Läuft gerade eine Session, werden Live-Daten gezeigt (Abruf alle 2 s). Live-Zugriff braucht einen Zugangsschlüssel (Token): `&token=…`. Ohne Schlüssel sperrt OpenF1 den Zugriff während einer Session, siehe unten.
+  - Sonst wird die letzte Session als Wiederholung abgespielt: Telemetrie, Positionen, Abstände, Reifen, Funk (echte MP3), Race Control und Wetter, in Zeitfenstern von 4 Minuten, die nur temporär im Speicher liegen. Oben stehen Pause, Tempo (1× bis 8×, `?speed=`, Standard 2×) und eine Zeitleiste. Ein Klick auf ein Rennen im Kalender spielt dieses Rennen ab, die Tabs Qualifying und Training die jeweilige Session. `&session=<session_key>` oder `&type=race|quali|practice|upcoming` wählt gezielt.
   - Ohne Session in den nächsten 4 Tagen, mit kommender Session: Vorschau mit Countdown, Zeitplan, Wertungen (Jolpica F1).
+- **Demo** (Schalter „Demo“ im Kopf, `?source=sim`) – Simulation mit erfundenen Daten und Schaltflächen, um Flaggen selbst auszulösen (Grün, Gelb, Safety Car, VSC, Rot, Regen). `&scenario=race|quali|upcoming|auto`
 
 **Große Bildschirme:** Die Seite nutzt die volle Breite bis 2560 x 1440 (und darüber zentriert). Dafür sind alle Größen im Stylesheet in `rem` angegeben; die Wurzelschrift wächst mit der Bildschirmbreite (16 px bis 1919 px, 18 px ab 1920 px, 20,8 px ab 2300 px), so skaliert die gesamte Oberfläche gleichmäßig. Ant Design rechnet in px und wird mit demselben Faktor skaliert (`src/useScale.js`, `scaledTheme` in `src/theme.js`); Fotos und Avatare nehmen ihre Größe ebenfalls in `rem`. Neue Größen also in `rem` angeben (Linien und Rahmen bis 3 px dürfen px bleiben), Media-Queries bleiben in px.
+
+**Mobil:** Die Oberfläche ist für Handy und Tablet ausgelegt. Bis 900 px Breite ersetzt eine Navigationsleiste am unteren Rand die Tabs der Kopfzeile (mit Rücksicht auf Notch und Home-Leiste, `viewport-fit=cover`). Bis 700 px werden Kennzahlen, Banner, Karte, Tabellen (seitlich wischbar), Telemetrie und Wiederholungsleiste enger und mit größeren Tippflächen gesetzt, das Telemetrie-Diagramm wird schmaler gezeichnet, damit die Schrift lesbar bleibt. Auf niedrigen Bildschirmen (Handy quer) scrollt die Kopfzeile mit. Zum Testen reicht die Geräteansicht der Browser-Entwicklertools (z. B. 390 x 844).
+
+**Hinweis zu OpenF1:** Läuft gerade eine echte F1-Session (Training, Qualifying, Rennen), sperrt OpenF1 den Zugriff für alle ohne Zugangsschlüssel bis zu ihrem Ende, auch für Wiederholungen vergangener Rennen. Der Browser meldet das als CORS-Fehler; die App zeigt dann einen Hinweis, und die Vorschau bleibt echt (Zeitplan und Wertungen von Jolpica, Layout aus der lokalen Datei). Rennen, Qualifying und Training sind in der Navigation ausgegraut (Schloss), solange OpenF1 keine Session liefert und nicht die Simulation läuft; ein Link im Hinweis startet die Simulation. Bei 0 des Countdowns läuft eine kurze Flaggen-Animation, danach zeigt die Vorschau ein Live-Feld mit der vergangenen Zeit.
 
 **Sprache:** Die Oberfläche gibt es auf Deutsch und Englisch. Das Sprachmenü sitzt rechts in der Kopfzeile, die Wahl wird im Browser gespeichert. Ohne Wahl gilt die Browsersprache (Deutsch, sonst Englisch); `?lang=en` bzw. `?lang=de` erzwingt eine Sprache. Alle Texte stehen in `js/locales/de.js` und `js/locales/en.js` (gleiche Schlüssel, `{name}` als Platzhalter, `_one`/`_other` für Mehrzahl) und werden mit `t(schlüssel, werte)` aus `js/i18n.js` geholt, auch in der Datenschicht. Ein Test prüft, dass beide Dateien dieselben Schlüssel und Platzhalter haben und dass jeder im Code verwendete Schlüssel existiert. Neue Texte also in beiden Dateien ergänzen. Datumsformate, Dezimaltrenner und die Sprache der Sprachausgabe folgen der Wahl; Race-Control-Meldungen werden bekannte Muster übersetzt, der Originaltext bleibt englisch. Bereits erzeugte Demo-Meldungen der Simulation bleiben in der Sprache, in der sie entstanden sind.
 
@@ -56,7 +59,7 @@ Grenzen der OpenF1-Anbindung: Funk gibt es nur als Audio (Transkript über die A
 
 ## Teamfarben und flüssige Bewegung
 
-- **Teamfarben:** Punkte auf der Karte, ein Balken neben dem Kürzel in den Tabellen und die Überholhinweise tragen die Teamfarbe. Die Demo nutzt erfundene Teams mit eigenen Farben, mit OpenF1 kommen die echten Farben aus `team_colour` (`color`/`team` im Fahrer-Zustand). Farben werden vor der Verwendung als `#rrggbb` geprüft. Der Leader hat zusätzlich einen roten Ring. Die Timing-Farben (Lila/Grün/Gelb) bleiben der Zeitenanzeige vorbehalten.
+- **Teamfarben:** Punkte auf der Karte, ein Balken neben dem Kürzel in den Tabellen und die Überholhinweise tragen die Teamfarbe. Die Demo (Simulation) nutzt erfundene Teams mit eigenen Farben, mit OpenF1 kommen die echten Farben aus `team_colour` (`color`/`team` im Fahrer-Zustand). Farben werden vor der Verwendung als `#rrggbb` geprüft. Der Leader hat zusätzlich einen roten Ring. Die Timing-Farben (Lila/Grün/Gelb) bleiben der Zeitenanzeige vorbehalten.
 - **Flüssige Bewegung:** Die Daten kommen nur alle 0,5 bis 2 s. Ein Animator (`createCarAnimator`) rechnet jede Position auf den Anteil der Runde um und fährt zwischen zwei Datenständen entlang der Strecke (nicht auf der Sehne, auch über die Ziellinie), 60 Bilder pro Sekunde. Die Anzeige läuft dadurch ein Update hinter den Daten her. Große Sprünge (Boxengasse, Neustart) werden nicht überblendet.
 
 ## Überholhinweise
@@ -120,7 +123,6 @@ js/format.js                   Formatierung, Timing-Klassen, HTML-Escaping
 js/sources/demo.js             Simulation (Engine ohne Timer, testbar)
 js/sources/openf1.js           OpenF1-Adapter (live und Wiederholung)
 js/sources/replay-buffer.js    Zeitfenster-Puffer der Wiederholung
-js/sources/replay-demo.js      Demo mit echten Daten, Rückfall auf die Simulation
 js/sources/jolpica.js          Jolpica F1: Kalender, Wertungen, Ergebnisse
 js/waveform.js, js/teams.js    Wellenformen, Team- und Reifenfarben
 public/data/circuits.json      Layouts (generiert, CC BY 4.0)
