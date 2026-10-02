@@ -15,14 +15,6 @@ import { Top5 } from './components/Main.jsx';
 
 
 
-function askKey() {
-  try {
-    let k = sessionStorage.getItem('openai_key');
-    if (!k) { k = window.prompt(t('app.openaiKey')); if (k) sessionStorage.setItem('openai_key', k.trim()); }
-    return k && k.trim();
-  } catch { return null; }
-}
-
 function Loading() {
   return <div className="main" aria-busy="true"><Skeleton.Node active style={{ width: '100%', height: 92 }}> </Skeleton.Node><Skeleton.Node active style={{ width: '100%', height: 360 }}> </Skeleton.Node></div>;
 }
@@ -69,7 +61,7 @@ export function App() {
         <Layout.Content className="main" id="mainc" tabIndex={-1}>
           {ui.view === 'calendar' ? <Calendar cal={ui.cal} ui={ui} db={ui.db} actions={actions} /> : <Main state={state} ui={ui} hist={hist} refHist={refHist} actions={actions} />}
         </Layout.Content>
-        {hasFeed && <Feed items={[...state.feed, ...ui.events].sort((a, b) => b.t - a.t)} show={ui.show} onShow={actions.showKind} drivers={state.drivers} filter={ui.filter} onFilter={actions.filter} collapsed={!ui.feedOpen} onToggle={actions.toggleFeed} sub={sub} note={state.sourceNote || ''} proxy={params.get('proxy') ?? 'local'} getKey={askKey} />}
+        {hasFeed && <Feed items={[...state.feed, ...ui.events].sort((a, b) => b.t - a.t)} show={ui.show} onShow={actions.showKind} drivers={state.drivers} filter={ui.filter} onFilter={actions.filter} collapsed={!ui.feedOpen} onToggle={actions.toggleFeed} sub={sub} note={state.sourceNote || ''} proxy={params.get('proxy') ?? 'local'} />}
       </div>
       <footer className="foot">
         <span>{t('foot.unofficial')}</span>

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { detectOvertakes } from '../js/overtakes.js';
 import { detectPitStops, detectRetirements } from '../js/pitstops.js';
+import { plannedLaps } from '../js/laps.js';
 import { eventsFrom } from '../js/events.js';
 import { createCarAnimator } from '../js/track.js';
 import { createDemoSource } from '../js/sources/demo.js';
@@ -8,7 +9,7 @@ import { yearsFor } from '../js/calendar.js';
 import { createOpenF1Source } from '../js/sources/openf1.js';
 
 const sessionId = (s) => `${s.session.type}|${s.session.name}|${s.session.circuit}`;
-const TAB_LABEL = { upcoming: 'tab.upcoming', race: 'tab.race', quali: 'tab.quali', practice: 'tab.practice', calendar: 'tab.calendar' }; // Schlüssel, übersetzt erst die Ladeanzeige
+const TAB_LABEL = { upcoming: 'tab.upcoming', session: 'tab.session', race: 'tab.race', sprint: 'tab.sprint', quali: 'tab.quali', sprintquali: 'tab.sprintquali', practice: 'tab.practice', calendar: 'tab.calendar' }; // Schlüssel, übersetzt erst die Ladeanzeige
 const DEFAULT_SHOW = { radio: true, rc: true, overtake: true, pit: true, dnf: true }; // was unter "Alle" in der Ereignisliste steht
 const PENDING_MAX_MS = 30000; // spätestens dann verschwindet die Ladeanzeige, auch wenn nie Daten der Zielansicht kommen
 
@@ -41,6 +42,8 @@ export function useDashboard() {
   const [year, setYear] = useState(new Date().getFullYear());
   const [cal, setCal] = useState(null);
   const [db, setDb] = useState(null);
+  const [geo, setGeo] = useState(null); // Ausrichtung der Layouts auf die Weltkarte (circuit-geo.json)
+  const [basemap, setBasemap] = useState(() => { try { const v = params.get('base') || localStorage.getItem('pitwall.basemap'); return v === 'off' || v === 'sat' ? v : 'map'; } catch { return 'map'; } }); // 'off' | 'map' | 'sat'
   // Seitenwechsel, der noch auf Daten wartet: { type, label }. type null = bestimmte Session (Kalender), dann entscheidet der Wechsel der Session.
   const [pending, setPending] = useState(null);
   const pendRef = useRef(null), pendTimer = useRef(null);
@@ -57,14 +60,25 @@ export function useDashboard() {
 
   useEffect(() => {
     fetch('data/circuits.json').then((r) => r.json()).then(setDb).catch(() => {});
+    fetch('data/circuit-geo.json').then((r) => r.json()).then(setGeo).catch(() => {}); // ohne die Datei gibt es einfach keinen Kartenhintergrund
   }, []);
 
+  const geoRef = useRef(null);
+  geoRef.current = geo;
+
   useEffect(() => {
-    source.start((s) => {
+    source.start((s0) => {
+      // OpenF1 nennt die Rundenzahl nicht: aus Streckenlänge und Renndistanz schätzen (nie weniger als die gefahrene Runde)
+      let s = s0;
+      const ss = s0.session;
+      if (ss.type === 'race' && ss.totalLaps == null) {
+        const planned = plannedLaps(geoRef.current?.[s0.track?.layoutId]?.len, ss.kind, s0.track?.layoutId);
+        if (planned) s = { ...s0, session: { ...ss, totalLaps: Math.max(planned, ss.lap || 0) } };
+      }
       const prev = core.current.prev;
       const same = prev && sessionId(prev) === sessionId(s);
       const pd = pendRef.current; // Zielansicht ist da, sobald Typ bzw. Session passen und nichts mehr lädt
-      if (pd && (s.liveLock || s.problem || (!s.replay?.loading && (pd.type ? s.session.type === pd.type : sessionId(s) !== pd.startId)))) clearPending(); // auch bei Fehler/Sperre: die Zielansicht kommt so bald nicht
+      if (pd && (s.liveLock || s.problem || (!s.replay?.loading && (pd.type ? (s.session.kind || s.session.type) === pd.type : sessionId(s) !== pd.startId)))) clearPending(); // auch bei Fehler/Sperre: die Zielansicht kommt so bald nicht
       // Sprünge in der Wiederholung (Spulen, Laden) sind keine Überholmanöver
       const jumped = s.replay && (s.replay.loading || prev?.replay?.loading || (prev?.replay && Math.abs(s.replay.t - prev.replay.t) > 3000 * Math.max(1, s.replay.speed)));
       if (same && !jumped && viewRef.current !== 'calendar') {
@@ -124,10 +138,23 @@ export function useDashboard() {
   yearRef.current = year;
 
   const actions = {
+    /** Eine Session des Wochenendes öffnen: key aus state.weekend (OpenF1), ohne key nach Art (Demo, unbekanntes Wochenende). */
+    session(kind, key = null) {
+      startPending({ type: kind, label: TAB_LABEL[kind] || 'tab.session' });
+      setView(null);
+      if (key != null && source.openSession) source.openSession(key); else source.select(kind);
+    },
     tab(type) {
+      if (type === 'session') { // Sammelpunkt für Rennen, Sprint, Quali, Sprint-Quali, Training: zurück zur zuletzt gesehenen Session, sonst Rennen
+        const prev = core.current.prev?.session;
+        const same = prev && prev.type !== 'upcoming' ? prev : null;
+        if (same && viewRef.current !== 'calendar') return;
+        actions.session(same ? same.kind || same.type : 'race', same && !source.sim ? same.key ?? null : null);
+        return;
+      }
       if (type === 'calendar') { clearPending(); source.pause?.(true); setView('calendar'); loadCalendar(yearRef.current); } // Wiederholung anhalten
       else {
-        if (type !== core.current.prev?.session.type) startPending({ type, label: TAB_LABEL[type] || 'tab.race' });
+        if (type !== (core.current.prev?.session.kind || core.current.prev?.session.type)) startPending({ type, label: TAB_LABEL[type] || 'tab.race' });
         setView(null); source.select(type);
       }
     },
@@ -136,6 +163,7 @@ export function useDashboard() {
     pick: setSel,
     loadSeasons: () => loadSeasons(yearsFor()),
     toggleFeed() { setFeedOpen((o) => { try { localStorage.setItem('pitwall.feed', o ? 'closed' : 'open'); } catch { /* optional */ } return !o; }); },
+    basemap(id) { setBasemap(id); try { localStorage.setItem('pitwall.basemap', id); } catch { /* optional */ } },
     mapMode(m) { setMapMode(m); try { localStorage.setItem('pitwall.map', m); } catch { /* optional */ } },
     filter: setFilter,
     showKind(k, v) { setShow((cur) => { const n = { ...cur, [k]: v }; try { localStorage.setItem('pitwall.show', JSON.stringify(n)); } catch { /* optional */ } return n; }); },
@@ -149,6 +177,6 @@ export function useDashboard() {
   };
 
   const loading = pending ? { label: pending.label } : view === 'calendar' && !cal ? { label: TAB_LABEL.calendar } : null;
-  const ui = { events, show, loading, pendingType: pending?.type || null, seasons, feedOpen, mapMode, cinema: mapMode === 'wide' && view !== 'calendar' && !!state?.track?.points?.length, sel: selected, filter, demo: source.demo, sim: !!source.sim, view, year, cal, db, pos: animator.sample(performance.now()) };
+  const ui = { geo, basemap, events, show, loading, pendingType: pending?.type || null, seasons, feedOpen, mapMode, cinema: mapMode === 'wide' && view !== 'calendar' && !!state?.track?.points?.length, sel: selected, filter, demo: source.demo, sim: !!source.sim, view, year, cal, db, pos: animator.sample(performance.now()) };
   return { state, ui, actions, hist, animator, params };
 }

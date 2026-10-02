@@ -24,7 +24,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { Chrome } from '../src/components/Chrome.jsx';
 import { Main } from '../src/components/Main.jsx';
 import { Calendar } from '../src/components/Calendar.jsx';
-import { transcribe, audioUrl, enginesFor, _resetForTests } from '../js/transcribe.js';
+import { transcribe, audioUrl, engineFor, _resetForTests } from '../js/transcribe.js';
 
 const html = (el) => renderToStaticMarkup(el);
 const chrome = (state, ui) => html(<Chrome state={state} ui={ui} />);
@@ -134,26 +134,13 @@ test('openf1 flag derivation', () => {
 
 test('transcribe: demo returns the spoken text', async () => {
   assert.equal(await transcribe('demo', { speech: 'Box, Box.' }, { delay: 0 }), 'Box, Box.');
-  assert.deepEqual(enginesFor({ speech: 'x' }).map((e) => e.id), ['demo']);
-  assert.deepEqual(enginesFor({ url: 'x' }).map((e) => e.id), ['local', 'openai']);
+  assert.equal(engineFor({ speech: 'x' }), 'demo');
+  assert.equal(engineFor({ url: 'x' }), 'local', 'echter Funk läuft im Browser, nie über einen Dienst');
 });
 
 test('transcribe: audioUrl proxy template', () => {
   assert.equal(audioUrl('https://a/b.mp3'), 'https://a/b.mp3');
   assert.equal(audioUrl('https://a/b.mp3', 'https://p/?u={url}'), 'https://p/?u=https%3A%2F%2Fa%2Fb.mp3');
-});
-
-test('transcribe: openai posts audio with bearer key', async () => {
-  const calls = [];
-  const fetchImpl = async (url, init) => {
-    calls.push([url, init]);
-    return url.includes('openai.com') ? { ok: true, json: async () => ({ text: ' Box this lap. ' }) } : { ok: true, blob: async () => new Blob(['x']) };
-  };
-  const text = await transcribe('openai', { url: 'https://r/a.mp3' }, { fetchImpl, getKey: () => 'sk-test' });
-  assert.equal(text, 'Box this lap.');
-  assert.equal(calls[1][0], 'https://api.openai.com/v1/audio/transcriptions');
-  assert.equal(calls[1][1].headers.Authorization, 'Bearer sk-test');
-  await assert.rejects(transcribe('openai', { url: 'u' }, { fetchImpl, getKey: () => null }), /API-Key/);
 });
 
 test('transcribe: local uses the loaded pipeline, errors are readable', async () => {
@@ -164,7 +151,8 @@ test('transcribe: local uses the loaded pipeline, errors are readable', async ()
   assert.deepEqual(seen, ['https://r/a.mp3']);
   _resetForTests();
   await assert.rejects(transcribe('local', { url: 'u' }, { loader: async () => { throw new TypeError('Failed to fetch'); } }), /Netzwerk/);
-  await assert.rejects(transcribe('openai', {}, {}), /kein Audio/);
+  await assert.rejects(transcribe('local', {}, {}), /kein Audio/);
+  await assert.rejects(transcribe('openai', { url: 'u' }, {}), /Unbekannte Engine/, 'OpenAI gibt es nicht mehr');
 });
 
 const DB = JSON.parse(readFileSync(new URL('../public/data/circuits.json', import.meta.url), 'utf8'));
@@ -963,7 +951,7 @@ test('live session lock: detected from the race calendar, shown as a clear notic
     assert.ok(s.problem.includes('Live-Session') && s.problem.includes('Malaysia GP') && !s.problem.includes('Failed to fetch'));
     const ui = { sim: false, sel: 1 };
     assert.ok(chrome(s, ui).includes('Live-Session läuft') && chrome(s, ui).includes('class="livelock"'));
-    assert.ok(chrome(s, ui).includes('Zur Demo (Simulation) wechseln') && chrome(s, ui).includes('source=sim'), 'Link zur Demo');
+    assert.ok(chrome(s, ui).includes('Zur Demo wechseln') && chrome(s, ui).includes('source=sim'), 'Link zur Demo');
     i18n.setLang('en', { persist: false });
     assert.ok(chrome(s, ui).includes('Live session in progress') && chrome(s, ui).includes('Practice 1'));
   } finally { Date.now = realNow; i18n.setLang('de', { persist: false }); src.stop(); }
@@ -1032,15 +1020,211 @@ test('navigation: race, quali and practice are disabled while OpenF1 provides no
   const base = { session: { type: 'upcoming' }, flag: 'green', now: 1, drivers: [], track: null, upcoming: {} };
   const locked = { ...base, liveLock: { name: 'Training 1', meeting: 'X' }, problem: 'x' };
   const out = chrome(locked, { sel: 1, sim: false });
-  assert.equal((out.match(/ant-menu-item-disabled/g) || []).length, 3, 'Rennen, Qualifying, Training');
-  assert.equal((out.match(/<button[^>]*disabled/g) || []).length, 3, 'auch in der unteren Navigationsleiste');
+  assert.equal((out.match(/ant-menu-item-disabled/g) || []).length, 5, 'Rennen, Sprint, Qualifying, Sprint-Quali, Training');
+  assert.equal((out.match(/<button[^>]*disabled/g) || []).length, 5, 'auch in der unteren Navigationsleiste');
   assert.ok(out.includes('wegen einer Live-Session gesperrt'));
   const down = chrome({ ...base, problem: 'OpenF1 nicht erreichbar' }, { sel: 1, sim: false });
-  assert.equal((down.match(/ant-menu-item-disabled/g) || []).length, 3);
+  assert.equal((down.match(/ant-menu-item-disabled/g) || []).length, 5);
   assert.ok(down.includes('OpenF1 antwortet nicht'));
   // Simulation, normaler Betrieb und geladene Session: nichts gesperrt
   assert.ok(!chrome(locked, { sel: 1, sim: true }).includes('ant-menu-item-disabled'), 'Simulation');
   assert.ok(!chrome(base, { sel: 1, sim: false }).includes('ant-menu-item-disabled'), 'ohne Fehler');
   assert.ok(!chrome({ ...base, session: { type: 'race' }, problem: 'x' }, { sel: 1, sim: false }).includes('ant-menu-item-disabled'), 'Session geladen, nur zeitweiser Fehler');
   try { i18n.setLang('en', { persist: false }); assert.ok(chrome(locked, { sel: 1, sim: false }).includes('blocked because of a live session')); } finally { i18n.setLang('de', { persist: false }); }
+});
+
+// ---------- Kartenhintergrund ----------
+import { planBasemap, layoutToLonLat, toMercator, fromMercator, STYLES, MAX_TILES } from '../js/basemap.js';
+import { trackView } from '../js/track.js';
+import { DEMO_TRACK } from '../js/sources/demo-track.js';
+
+const geoDb = JSON.parse(readFileSync('public/data/circuit-geo.json', 'utf8'));
+const circuitDb = JSON.parse(readFileSync('public/data/circuits.json', 'utf8'));
+
+test('Mercator: Hin- und Rückrechnung', () => {
+  const [lon, lat] = fromMercator(...toMercator(9.29, 45.62));
+  assert.ok(Math.abs(lon - 9.29) < 1e-9 && Math.abs(lat - 45.62) < 1e-9);
+});
+
+test('Geodaten: Monza liegt bei Monza, alle Kennungen existieren', () => {
+  const pts = DEMO_TRACK.points;
+  const [lon, lat] = layoutToLonLat(geoDb['demo-monza'], pts[0][0], pts[0][1]);
+  assert.ok(lon > 9.27 && lon < 9.31 && lat > 45.60 && lat < 45.64, `${lon} ${lat}`);
+  const ids = new Set(Object.values(circuitDb).flatMap((c) => c.layouts.map((l) => l.id)));
+  ids.add('demo-monza');
+  for (const [id, g] of Object.entries(geoDb)) {
+    assert.ok(ids.has(id), `unbekanntes Layout ${id}`);
+    assert.equal(g.m.length, 6);
+    assert.ok(g.m.every(Number.isFinite));
+    assert.ok(g.err < 60, `${id}: Abweichung ${g.err} m`);
+  }
+});
+
+test('planBasemap: Kacheln decken den Ausschnitt, Ecken liegen innerhalb', () => {
+  const tr = { points: DEMO_TRACK.points, rotate: DEMO_TRACK.rotate };
+  const v = trackView(tr);
+  const geo = geoDb['demo-monza'];
+  for (const style of Object.keys(STYLES)) {
+    const p = planBasemap({ view: v, rot: v.rotation, geo, style, dpr: 1 });
+    assert.ok(p && p.count > 0 && p.count <= MAX_TILES);
+    assert.ok(p.tiles[0].href.startsWith('https://server.arcgisonline.com/'));
+    // Mittelpunkt des Ausschnitts muss in der Fläche mindestens einer Kachel liegen
+    const rad = (-v.rotation.deg * Math.PI) / 180, cs = Math.cos(rad), sn = Math.sin(rad);
+    const mx = v.vx + v.vw / 2, my = v.vy + v.vh / 2;
+    const lx = v.rotation.cx + (mx - v.rotation.cx) * cs - (my - v.rotation.cy) * sn;
+    const ly = v.rotation.cy + (mx - v.rotation.cx) * sn + (my - v.rotation.cy) * cs;
+    const hit = p.tiles.some(({ matrix: [a, b, c, d, e, f] }) => {
+      const det = a * d - b * c, X = lx - e, Y = ly - f;
+      const u = (d * X - c * Y) / det, w = (-b * X + a * Y) / det;
+      return u >= 0 && u <= 256 && w >= 0 && w <= 256;
+    });
+    assert.ok(hit, style);
+  }
+  assert.equal(planBasemap({ view: v, rot: v.rotation, geo: null }), null);
+});
+
+test('Kartenhintergrund: Texte in beiden Sprachen', async () => {
+  const i18n = await import('../js/i18n.js');
+  for (const lang of ['de', 'en']) {
+    i18n.setLang(lang, { persist: false });
+    try { for (const k of ['map.base', 'map.base.off', 'map.base.map', 'map.base.sat']) assert.notEqual(i18n.t(k), k, `${lang} ${k}`); } finally { i18n.setLang('de', { persist: false }); }
+  }
+});
+
+test('Countdown: vergangene Session gilt nicht als laufend', async () => {
+  const { Countdown } = await import('../src/components/Countdown.jsx');
+  const { isOver } = await import('../js/livelock.js');
+  assert.ok(isOver('sess.raceDone', 10), 'als beendet markiertes Rennen');
+  assert.ok(isOver('Race', (120 + 21) * 60), 'länger als Dauer plus Nachlauf');
+  assert.ok(!isOver('Race', 30 * 60), 'läuft noch');
+  const now = Date.now();
+  const old = html(<Countdown startsAt={now - 130 * 86400000} now={now} label="sess.raceDone" />);
+  assert.ok(old.includes('livepanel over') && !old.includes('lpbar') && !old.includes('3133'), old);
+  const live = html(<Countdown startsAt={now - 600000} now={now} label="Race" />);
+  assert.ok(live.includes('lpbar') && !live.includes('over'), 'laufend');
+});
+
+test('Flaggen: jedes Land des Demo-Kalenders hat eine Flagge', async () => {
+  const { flagUrl } = await import('../src/flags.js');
+  const countries = new Set(Object.values(circuitDb).map((c) => c.country));
+  for (const c of countries) assert.ok(flagUrl(c.replace(/-/g, ' ')), `keine Flagge für ${c}`);
+});
+
+test('Zeitzonen: Strecken-Kennungen und Kurzname', async () => {
+  const { trackZone, zoneName } = await import('../js/tz.js');
+  for (const id of Object.keys(circuitDb)) assert.ok(trackZone(`${id}-1`), `keine Zeitzone für ${id}`);
+  assert.equal(trackZone('demo-monza'), 'Europe/Rome');
+  assert.equal(trackZone('unbekannt-1'), null);
+  assert.match(zoneName(Date.UTC(2026, 6, 1), 'Asia/Tokyo', 'en'), /GMT\+9/);
+});
+
+test('Vorschau: Laufnummer wird nie angezeigt', () => {
+  const st = (startsAt) => ({ session: { type: 'upcoming' }, now: Date.now(), drivers: [], track: null, upcoming: { startsAt, nextLabel: 'Practice 2', meeting: 'X GP', circuit: 'Y · Z', facts: [['fact.round', '16 von 23'], ['fact.circuit', 'Y']], schedule: [] } });
+  const m = (s) => html(<Main state={s} ui={{ sel: 1 }} />);
+  for (const at of [Date.now() + 3600000, Date.now() - 600000]) { const h = m(st(at)); assert.ok(!h.includes('16 von 23') && h.includes('Y')); }
+});
+
+test('Sprint: Sessionart, Demo-Szenarien und Tabs', async () => {
+  const { sessionKind, baseType } = await import('../js/sessions.js');
+  const cases = { Race: 'race', Rennen: 'race', Sprint: 'sprint', 'Sprint Qualifying': 'sprintquali', 'Sprint Shootout': 'sprintquali', Qualifying: 'quali', SQ2: 'sprintquali', Q2: 'quali', 'Practice 1': 'practice', 'Training 2': 'practice', 'sess.sprintq': 'sprintquali', 'sess.sprint': 'sprint' };
+  for (const [n, k] of Object.entries(cases)) assert.equal(sessionKind(n), k, n);
+  assert.equal(baseType('sprint'), 'race');
+  assert.equal(baseType('sprintquali'), 'quali');
+  const sp = createDemoEngine({ scenario: 'sprint', seed: 3 }); sp.step(1);
+  const ss = sp.state().session;
+  assert.deepEqual([ss.type, ss.kind, ss.name, ss.totalLaps], ['race', 'sprint', 'Sprint', 19]);
+  const sq = createDemoEngine({ scenario: 'sprintquali', seed: 3 }); sq.step(1);
+  const qs = sq.state().session;
+  assert.deepEqual([qs.type, qs.kind, qs.name], ['quali', 'sprintquali', 'SQ2']);
+  assert.ok(qs.remaining <= 600);
+  const race = createDemoEngine({ scenario: 'race', seed: 3 }); race.step(1);
+  assert.equal(race.state().session.totalLaps, 57);
+  const tabs = chrome({ session: { type: 'race', kind: 'sprint' }, flag: 'green', now: 1, drivers: [], track: null }, { sel: 1, sim: true });
+  assert.ok(tabs.includes('Sprint-Quali') && tabs.includes('ant-menu-item-selected'), 'Tabs');
+});
+
+test('DNS: Auto, das nicht losfährt, wird sofort ausgeblendet und gilt nicht als Ausfall', () => {
+  const mk = (st) => ({ session: { type: 'race' }, flag: 'green', now: 0, track: { points: [[0, 0], [100, 0], [100, 100], [0, 100]] }, drivers: [{ num: 1, code: 'NOR', pos: 1, x: 10, y: 0 }, { num: 2, code: 'STR', pos: 2, x: 50, y: 0, status: st }] });
+  const none = mk(null), dns = mk('dns');
+  assert.ok(!trackSvg(dns, null).includes('data-car="2"'), 'DNS-Auto ist ausgeblendet');
+  assert.ok(trackSvg(dns, null).includes('data-car="1"'));
+  assert.deepEqual(detectRetirements(none, dns), [], 'DNS ist kein Ausfall mit Meldung');
+});
+
+test('Puffer: moved erkennt, ob sich ein Fahrer rund um den Start bewegt hat', () => {
+  const origin = Date.parse('2025-01-01T12:00:00Z');
+  const buf = createReplayBuffer({ origin });
+  const row = (n, s, sp) => ({ date: new Date(origin + s * 1000).toISOString(), driver_number: n, speed: sp });
+  const rows = [];
+  for (let s = 0; s < 60; s++) { rows.push(row(1, s, s < 20 ? 0 : 120)); rows.push(row(2, s, 0)); }
+  buf.add(origin, { carData: rows, location: [], intervals: [] });
+  const from = origin + 25000, to = origin + 40000;
+  assert.equal(buf.moved(1, from, to), true);
+  assert.equal(buf.moved(2, from, to), false);
+  assert.equal(buf.moved(3, from, to), null, 'keine Daten zum Fahrer');
+  assert.equal(buf.moved(1, origin + 9 * 60000, origin + 9 * 60000 + 1000), null, 'Zeitraum nicht geladen');
+});
+
+test('replay: Auto, das nicht losfährt, wird kurz nach dem Start als DNS gemeldet (nicht erst nach 30 s als DNF)', async () => {
+  const start = Date.UTC(2025, 8, 21, 11);
+  const rs = start + 10 * 60000;
+  const at = (s) => new Date(rs + s * 1000).toISOString();
+  const session = { session_key: 1, meeting_key: 1, session_name: 'Race', date_start: new Date(start).toISOString(), date_end: new Date(start + 2 * 3600000).toISOString(), circuit_short_name: 'Monza', location: 'Monza', country_name: 'Italy', year: 2025 };
+  const rowsFor = (f) => { const out = []; for (let s = -60; s <= 200; s++) out.push(...f(s)); return out; };
+  const client = async (path) => {
+    switch (path.split('?')[0]) {
+      case 'sessions': return path.includes('meeting_key') ? [] : [session];
+      case 'drivers': return [{ driver_number: 1, name_acronym: 'NOR', team_name: 'McLaren', team_colour: 'FF8000' }, { driver_number: 16, name_acronym: 'LEC', team_name: 'Ferrari', team_colour: 'E8002D' }];
+      case 'car_data': return rowsFor((s) => [{ driver_number: 1, date: at(s), speed: s < 0 ? 0 : 150, throttle: 50, brake: 0, n_gear: 4, rpm: 9000, drs: 0 }, { driver_number: 16, date: at(s), speed: 0, throttle: 0, brake: 0, n_gear: 0, rpm: 0, drs: 0 }]);
+      case 'location': return rowsFor((s) => [{ driver_number: 1, date: at(s), x: 100 + Math.max(0, s) * 3, y: 200 }, { driver_number: 16, date: at(s), x: 90, y: 200 }]);
+      case 'position': return [{ driver_number: 1, date: at(-120), position: 1 }, { driver_number: 16, date: at(-120), position: 2 }];
+      case 'race_control': return [{ date: at(0), category: 'SessionStatus', message: 'SESSION STARTED', scope: 'Session' }];
+      default: return [];
+    }
+  };
+  const jolpica = { races: async () => [], driverStandings: async () => [], constructorStandings: async () => [], lastResult: async () => null };
+  const src = createOpenF1Source({ client, jolpica, replayOnly: true, speed: 20 });
+  const states = [];
+  src.start((s) => states.push(s));
+  try {
+    await waitFor(() => states.some((s) => s.session.type === 'race' && s.replay && s.replay.t >= rs + 9000 && s.drivers.length), 15000);
+    const s = states.findLast((x) => x.replay && x.replay.t >= rs + 9000);
+    const by = Object.fromEntries(s.drivers.map((d) => [d.code, d]));
+    assert.equal(by.LEC.status, 'dns', 'steht seit vor dem Start');
+    assert.ok(!by.NOR.status, 'fahrendes Auto ist normal');
+    assert.ok(s.replay.t < rs + 25000, 'gemeldet lange vor den 30 s');
+  } finally { src.stop(); }
+});
+
+test('Rundenzahl: aus Streckenlänge und Renndistanz', async () => {
+  const { plannedLaps } = await import('../js/laps.js');
+  const L = (id) => geoDb[id].len;
+  assert.equal(plannedLaps(L('monza-7'), 'race', 'monza-7'), 53);
+  assert.equal(plannedLaps(5412, 'race', 'bahrain-1'), 57);
+  assert.equal(plannedLaps(7004, 'race', 'spa-francorchamps-4'), 44);
+  assert.equal(plannedLaps(3337, 'race', 'monaco-6'), 78, 'Monaco: 260 km');
+  assert.equal(plannedLaps(7004, 'sprint', 'spa-francorchamps-4'), 15, 'Sprint: 100 km');
+  assert.equal(plannedLaps(null, 'race', 'x'), null);
+  for (const [id, g] of Object.entries(geoDb)) assert.ok(g.len > 2000 && g.len < 9000, `${id}: Länge ${g.len}`);
+});
+
+test('Funk: Transkript-Schalter statt Dropdown, Text erst im ausgeklappten Zustand', () => {
+  const radio = { id: 'rd1', kind: 'radio', t: 1e12, code: 'HAM', tag: 'FUNK', url: 'https://livetiming.formula1.com/x/a.mp3' };
+  const out = html(<Feed items={[radio]} drivers={[]} filter="radio" onFilter={() => {}} />);
+  assert.ok(out.includes('trtoggle') && out.includes('aria-expanded="false"') && out.includes('Transkript'));
+  assert.ok(!out.includes('ant-select') && !out.includes('class="tr'), 'kein Dropdown, kein Text im eingeklappten Zustand');
+});
+
+test('Fahrerfoto aus Namen: Schema des F1-Medienservers, mehrteilige Namen mit Leerzeichen', async () => {
+  const { f1Photo, safePhoto } = await import('../js/format.js');
+  const base = 'https://media.formula1.com/d_driver_fallback_image.png/content/dam/fom-website/drivers/';
+  assert.equal(f1Photo('Max', 'Verstappen'), `${base}M/MAXVER01_Max_Verstappen/maxver01.png.transform/1col/image.png`);
+  assert.equal(f1Photo('Andrea Kimi', 'Antonelli'), `${base}A/ANDANT01_Andrea%20Kimi_Antonelli/andant01.png.transform/1col/image.png`);
+  assert.ok(f1Photo('Nico', 'Hülkenberg').includes('NICHUL01_Nico_Hulkenberg'));
+  assert.equal(f1Photo('', 'X'), null);
+  assert.ok(safePhoto(f1Photo('Lando', 'Norris')), 'erlaubter Host');
+  const last = mapLastResult({ MRData: { RaceTable: { Races: [{ raceName: 'X', round: '1', Results: [{ position: '1', Driver: { code: 'NOR', givenName: 'Lando', familyName: 'Norris' }, Constructor: { name: 'McLaren' }, Time: { time: '1:23:45.000' } }] }] } } });
+  assert.ok(last.podium[0].photo.includes('LANNOR01'));
+  const st = { session: { type: 'upcoming' }, now: Date.now(), drivers: [], track: null, upcoming: { startsAt: Date.now() + 1e7, nextLabel: 'Race', meeting: 'X', circuit: 'Y · Z', schedule: [], lastResult: last } };
+  assert.ok(html(<Main state={st} ui={{ sel: 1 }} />).includes('LANNOR01'), 'Podium zeigt das Foto');
 });

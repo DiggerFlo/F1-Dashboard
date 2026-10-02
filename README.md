@@ -86,12 +86,24 @@ Die Karten nutzen die Layouts aus [julesr0y/f1-circuits-svg](https://github.com/
 
 Mit OpenF1-Daten wird das Layout über `circuit_short_name`/`location` der Session gewählt (Saison bestimmt die Variante) und die Positionsdaten der Fahrer per Drehung, Skalierung und Spiegelung darauf abgebildet. Passt die Abbildung nicht (Abweichung > 8 % des Streckenradius), zeigt die App stattdessen den Umriss aus den Positionsdaten. Die Ausrichtung folgt `f1-orientation` wie auf formula1.com.
 
+## Kartenhintergrund
+
+Unter dem Streckenlayout liegt auf Wunsch eine Karte der echten Umgebung, sodass man sieht, wo die Autos tatsächlich fahren. Der Schalter (Ortsmarke in der Kartenleiste) wählt **Aus**, **Karte** (dunkle Straßenkarte) oder **Satellit** (entsättigtes Luftbild). Die Wahl wird gespeichert, per URL geht `?base=off|map|sat`.
+
+Die Ausrichtung steckt in `public/data/circuit-geo.json`: Pro Layout eine Matrix Layout → Weltkarte, berechnet aus den Streckenverläufen von [bacinger/f1-circuits](https://github.com/bacinger/f1-circuits) (MIT, Daten aus OpenStreetMap). Mittlere Abweichung der Layouts von der echten Linie: meist 2 bis 15 m, Baku um 32 m. Neu erzeugen: `node scripts/build-geo.mjs`. Layouts ohne Geodaten (z. B. Buddh, Valencia, Yeongam) zeigen keinen Schalter. Dieselbe Datei enthält die offizielle Rundenlänge (`len`). Daraus schätzt die App die geplante Rundenzahl für die Anzeige "Runde 10/70", weil OpenF1 sie nicht liefert: kleinste Rundenzahl, die mindestens 305 km ergibt (Monaco 260 km, Sprint 100 km). Wird ein Rennen verkürzt, weicht die echte Zahl ab.
+
+Die Kacheln kommen live von den Esri-Servern (`server.arcgisonline.com`, ohne Schlüssel), Esri sieht dabei die IP-Adresse der Besucher. Die Nutzungsbedingungen von Esri für den schlüssellosen Zugriff sind nicht eindeutig; für einen öffentlichen Einsatz sollte man einen eigenen Kachelanbieter eintragen (`STYLES` in `js/basemap.js`). CARTO-Kacheln verlangen inzwischen einen Schlüssel.
+
+## Sprint-Wochenenden
+
+Sprint und Sprint-Quali haben eigene Tabs (neben Rennen und Qualifying) und laufen sonst wie ihre großen Geschwister: Der Sprint zeigt Spitzengruppe, Boxengasse und Überholhinweise, die Sprint-Quali die Cut-Off-Linie. OpenF1 liefert die Sessions als "Sprint", "Sprint Qualifying" bzw. 2023 "Sprint Shootout"; die Zuordnung steht in `sessionKind` in `js/sessions.js`. In der Demo gibt es beide als Szenario: der Sprint über 19 Runden ohne Boxenstopps, die Sprint-Quali als SQ2 mit 10 Minuten.
+
 ## Funk abspielen und transkribieren
 
-Jeder Funkspruch hat einen Audio-Player und ein Dropdown **Transkribieren …**:
+Jeder Funkspruch hat einen Audio-Player und einen Schalter **Transkript**:
 
-- **Lokal im Browser (Whisper):** läuft per transformers.js (Modell `whisper-tiny.en`, lädt beim ersten Mal ca. 40 MB vom CDN). Kein Key, nichts verlässt den Browser außer dem Modell-Download.
-- **OpenAI Whisper API:** fragt beim ersten Mal nach einem API-Key (nur in `sessionStorage` dieses Tabs, nur an api.openai.com gesendet).
+- **Im Browser, im Hintergrund:** Der Funk wird automatisch transkribiert, sobald er in der Seitenleiste steht (neueste zuerst, eine Nachricht nach der anderen, höchstens die 60 neuesten). Das läuft per transformers.js (Modell `whisper-tiny.en`, lädt beim ersten Mal ca. 40 MB vom CDN). Kein Key, kein Dienst: Audio und Text verlassen den Browser nicht, nur das Modell wird geladen. Whisper-tiny.en versteht nur Englisch.
+- **Schalter:** Er klappt das Transkript nur ein oder aus. Solange es noch läuft oder wartet, zeigt er einen Ladekreis, bei einem Fehler lässt sich die Transkription wiederholen.
 - **Demo:** In der Simulation hat der Funk keinen Text, sondern nur gesprochenen Inhalt. „Abspielen“ nutzt die Sprachausgabe des Browsers, das Demo-Transkript liefert den Text.
 
 Seitenleiste und Audio werden nicht neu aufgebaut, laufende Wiedergabe, offene Dropdowns und fertige Transkripte bleiben beim Live-Update erhalten. Sperrt der Audio-Server CORS, hilft `?proxy=https://dein-proxy/?u={url}`.
@@ -118,7 +130,7 @@ js/track.js                    Streckenkarte und Telemetrie-Verlauf (SVG-Strings
 js/svgpath.js, js/fit.js       SVG-Pfad -> Punkte, Anpassung der Positionsdaten ans Layout
 js/circuits.js, js/calendar.js Session -> Layout, Rennkalender (OpenF1 bzw. Demo)
 js/overtakes.js                Überholungen erkennen
-js/transcribe.js               Transkriptions-Engines (lokal, OpenAI, Demo)
+js/transcribe.js               Transkription im Browser (Whisper) und Demo
 js/format.js                   Formatierung, Timing-Klassen, HTML-Escaping
 js/sources/demo.js             Simulation (Engine ohne Timer, testbar)
 js/sources/openf1.js           OpenF1-Adapter (live und Wiederholung)

@@ -1,18 +1,12 @@
-// Transkription von Team-Funk. Engines: lokal im Browser (Whisper via transformers.js),
-// OpenAI-Whisper-API oder Demo (bekannter Text der Simulation).
-
-export const ENGINES = [
-  { id: 'local', get label() { return t('tr.local'); } },
-  { id: 'openai', get label() { return t('tr.openai'); } },
-];
-export const DEMO_ENGINE = { id: 'demo', get label() { return t('tr.demo'); } };
-
+// Transkription von Team-Funk komplett im Browser (Whisper via transformers.js, Modell wird einmal vom CDN geladen) oder, in der Simulation,
+// aus dem bekannten Text der Demo. Es verlässt kein Audio den Browser.
 import { t } from './i18n.js';
 
 const TRANSFORMERS_CDN = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3';
 const LOCAL_MODEL = 'Xenova/whisper-tiny.en';
 
-export const enginesFor = (msg) => (msg.speech ? [DEMO_ENGINE] : ENGINES);
+/** Engine einer Nachricht: Demo-Funk hat gesprochenen Text, echter Funk Audio. */
+export const engineFor = (msg) => (msg.speech ? 'demo' : 'local');
 
 /** Audio-URL, optional über einen Proxy (Vorlage mit {url}), falls die Quelle kein CORS erlaubt. */
 export function audioUrl(url, proxy) {
@@ -35,32 +29,17 @@ async function local(msg, { onProgress, proxy, loader }) {
   return String(out.text || '').trim();
 }
 
-async function openai(msg, { proxy, getKey, fetchImpl }) {
-  const key = getKey && getKey();
-  if (!key) throw new Error('Kein API-Key angegeben.');
-  const audio = await fetchImpl(audioUrl(msg.url, proxy));
-  if (!audio.ok) throw new Error(t('tr.err.audio', { status: audio.status }));
-  const fd = new FormData();
-  fd.append('file', await audio.blob(), 'radio.mp3');
-  fd.append('model', 'whisper-1');
-  const r = await fetchImpl('https://api.openai.com/v1/audio/transcriptions', { method: 'POST', headers: { Authorization: `Bearer ${key}` }, body: fd });
-  if (!r.ok) throw new Error(t('tr.err.openai', { status: r.status }));
-  return String((await r.json()).text || '').trim();
-}
-
 async function demo(msg, { delay = 700 }) {
   await new Promise((res) => setTimeout(res, delay));
   return msg.speech;
 }
 
-/** Transkribiert eine Funknachricht ({url} oder {speech}) mit der gewählten Engine. */
+/** Transkribiert eine Funknachricht ({url} oder {speech}). engine: 'local' (Browser) oder 'demo'. */
 export async function transcribe(engine, msg, opts = {}) {
-  const o = { fetchImpl: globalThis.fetch?.bind(globalThis), ...opts };
-  if (engine === 'demo') return demo(msg, o);
+  if (engine === 'demo') return demo(msg, opts);
   if (!msg.url) throw new Error('Diese Nachricht hat kein Audio.');
   try {
-    if (engine === 'local') return await local(msg, o);
-    if (engine === 'openai') return await openai(msg, o);
+    if (engine === 'local') return await local(msg, opts);
   } catch (e) {
     if (e instanceof TypeError) throw new Error(t('tr.err.network'));
     throw e;

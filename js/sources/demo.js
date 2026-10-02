@@ -10,7 +10,7 @@ import { buildDemoCalendar } from '../calendar.js';
 import { fmtLap } from '../format.js';
 import { t as tr } from '../i18n.js';
 
-const MONZA = { name: DEMO_TRACK.name, points: DEMO_TRACK.points, rotate: DEMO_TRACK.rotate };
+const MONZA = { name: DEMO_TRACK.name, points: DEMO_TRACK.points, rotate: DEMO_TRACK.rotate, layoutId: 'demo-monza' };
 const SECTORS = [0, 0.34, 0.68]; // Sektorgrenzen der Simulation (Anteil der Runde)
 const DRIVERS = [['NOR', 'Norris'], ['PIA', 'Piastri'], ['LEC', 'Leclerc'], ['HAM', 'Hamilton'], ['VER', 'Verstappen'], ['TSU', 'Tsunoda'], ['RUS', 'Russell'], ['ANT', 'Antonelli'], ['ALB', 'Albon'], ['SAI', 'Sainz'],
   ['LAW', 'Lawson'], ['HAD', 'Hadjar'], ['ALO', 'Alonso'], ['STR', 'Stroll'], ['OCO', 'Ocon'], ['BEA', 'Bearman'], ['HUL', 'Hülkenberg'], ['BOR', 'Bortoleto'], ['GAS', 'Gasly'], ['COL', 'Colapinto']];
@@ -50,7 +50,7 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
   let clips = new Map(); // code -> echte Funksprüche aus public/data/radio.json
   const clipPos = new Map();
   let gridLeft = null; // Startampel: Sekunden bis zum Start (negativ = Lichter aus, noch kurz sichtbar)
-  let seq = 0, bestLapAll = null, kind, simT, realT, flag, flagSince, feed, drivers, overall, remaining, upcomingEnd, autoIdx, weather, lastNow;
+  let seq = 0, bestLapAll = null, sprint = false, kind, simT, realT, flag, flagSince, feed, drivers, overall, remaining, upcomingEnd, autoIdx, weather, lastNow;
 
   const AUTO = [
     [0, () => setKind('race')], [40, () => trigger('sc')], [75, () => trigger('green')], [95, () => trigger('red')],
@@ -64,15 +64,18 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
       best: null, last: null, stops: 0, tyre: COMPOUNDS[i], tyreAge: 8 + (i % 7), pit: 0, onTrack: true, speed: 0, throttle: 0, brake: 0, gear: 1, rpm: 0, drs: false, gap: 0, interval: 0, pos: i + 1, x: null, y: null, wait: 0 };
   }
 
-  function setKind(k) {
+  const totalLaps = () => (sprint ? 19 : TOTAL_LAPS);
+  function setKind(k0) {
+    sprint = k0 === 'sprint' || k0 === 'sprintquali'; // Sprint: kurzes Rennen ohne Stopps, Sprint-Quali: kürzere Segmente
+    const k = k0 === 'sprint' ? 'race' : k0 === 'sprintquali' ? 'quali' : k0;
     kind = k; simT = 0; flag = 'green'; flagSince = null; feed = []; overall = [null, null, null]; bestLapAll = null;
     weather = { air: 24, track: 38, rain: false };
     drivers = DRIVERS.map((_, i) => newDriver(i));
     gridLeft = k === 'race' && startGrid > 0 ? startGrid : null;
     if (k === 'race') {
-      drivers.forEach((d, i) => { d.prog = 31 - i * 0.008; d.secStart = 0; });
+      drivers.forEach((d, i) => { d.prog = (sprint ? 13 : 31) - i * 0.008; d.secStart = 0; });
     } else if (k === 'quali' || k === 'practice') {
-      remaining = k === 'quali' ? 900 : 3600;
+      remaining = k === 'quali' ? (sprint ? 600 : 900) : 3600;
       drivers.forEach((d, i) => {
         d.onTrack = false; d.tyre = k === 'quali' ? 'S' : ['S', 'M', 'H'][i % 3]; d.tyreAge = 3; d.wait = Math.floor(rnd() * 30);
         if (i < 16) { // Q2 läuft bereits: erste Zeiten stehen
@@ -215,8 +218,8 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
         if (ahead && gap < GAP_SC * 0.5) rate = 0.3 / lapTime;
       }
       if (d.pit > 0) { rate *= 0.35; d.pit -= dt; if (d.pit <= 0) { d.pit = 0; } }
-      else if (flag === 'green' && d.tyreAge > 20 && rnd() < 0.002 * dt && d.stops < 2) { d.pit = 20; d.stops++; d.tyre = d.tyre === 'S' ? 'M' : 'H'; d.tyreAge = 0; say('', 'PIT', tr('demo.pitMsg', { code: d.code, n: d.stops, tyre: d.tyre === 'M' ? 'Medium' : 'Hard' })); }
-      else if (flag === 'sc' && d.tyreAge > 12 && d.stops < 2 && rnd() < 0.01 * dt) { d.pit = 20; d.stops++; d.tyre = 'H'; d.tyreAge = 0; }
+      else if (!sprint && flag === 'green' && d.tyreAge > 20 && rnd() < 0.002 * dt && d.stops < 2) { d.pit = 20; d.stops++; d.tyre = d.tyre === 'S' ? 'M' : 'H'; d.tyreAge = 0; say('', 'PIT', tr('demo.pitMsg', { code: d.code, n: d.stops, tyre: d.tyre === 'M' ? 'Medium' : 'Hard' })); }
+      else if (!sprint && flag === 'sc' && d.tyreAge > 12 && d.stops < 2 && rnd() < 0.01 * dt) { d.pit = 20; d.stops++; d.tyre = 'H'; d.tyreAge = 0; }
       advanceDriver(d, dt, rate);
       telemetry(d);
     });
@@ -228,7 +231,7 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
         if (sorted[i].prog > lim) sorted[i].prog = lim;
       }
     }
-    if (lead.prog >= TOTAL_LAPS + 1 && flag !== 'chequered') { flag = 'chequered'; say('', 'FINISH', tr('demo.finish')); }
+    if (lead.prog >= totalLaps() + 1 && flag !== 'chequered') { flag = 'chequered'; say('', 'FINISH', tr('demo.finish')); }
   }
 
   function stepQuali(dt) {
@@ -283,7 +286,7 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
   function state() {
     const base = {
       now: nowMs(), flag, sourceNote: tr('src.note.sim'),
-      weather: { air: Math.round(weather.air), track: Math.round(weather.track), rain: weather.rain }, track: { points: circuit.points, rotate: circuit.rotate }, feed: [...feed],
+      weather: { air: Math.round(weather.air), track: Math.round(weather.track), rain: weather.rain }, track: { points: circuit.points, rotate: circuit.rotate, layoutId: circuit.layoutId }, feed: [...feed],
     };
     if (kind === 'upcoming') {
       return { ...base, flag: 'green', session: { type: 'upcoming', name: 'Rennen', meeting: meetingName(), circuit: circuit.name, startsAt: upcomingEnd }, drivers: [],
@@ -296,10 +299,10 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
     }
     const leader = drivers[0];
     const session = kind === 'race'
-      ? { type: 'race', name: 'Rennen', circuit: circuit.name, lap: Math.min(TOTAL_LAPS, Math.floor(leader.prog)), totalLaps: TOTAL_LAPS, flagSince }
+      ? { type: 'race', kind: sprint ? 'sprint' : 'race', name: sprint ? 'Sprint' : 'Rennen', circuit: circuit.name, lap: Math.min(totalLaps(), Math.floor(leader.prog)), totalLaps: totalLaps(), flagSince }
       : kind === 'practice'
-        ? { type: 'practice', name: 'Training 2', circuit: circuit.name, remaining, cutoff: null, flagSince }
-        : { type: 'quali', name: 'Q2', circuit: circuit.name, remaining, cutoff: 10, flagSince };
+        ? { type: 'practice', kind: 'practice', name: 'Training 2', circuit: circuit.name, remaining, cutoff: null, flagSince }
+        : { type: 'quali', kind: sprint ? 'sprintquali' : 'quali', name: sprint ? 'SQ2' : 'Q2', circuit: circuit.name, remaining, cutoff: 10, flagSince };
     const out = { ...base, startLights: kind === 'race' && gridLeft != null ? { startsAt: Date.now() + gridLeft * 1000, now: Date.now() } : undefined, session, drivers: drivers.map((d) => ({ ...d, onTrack: kind === 'quali' || kind === 'practice' ? d.onTrack : true })) };
     if (flag === 'sc') { const [x, y] = pointAt(circuit.points, leader.prog + 0.03); out.safetyCar = { x, y }; }
     return out;
@@ -335,13 +338,13 @@ export function createDemoSource(opts = {}) {
       timer = setInterval(() => { engine.step(tickMs / 1000); push(); }, tickMs);
     },
     stop() { clearInterval(timer); },
-    select(type) { engine.setScenario(['practice', 'quali', 'upcoming'].includes(type) ? type : 'race'); },
+    select(type) { engine.setScenario(['practice', 'quali', 'sprint', 'sprintquali', 'upcoming'].includes(type) ? type : 'race'); },
     trigger(ev) { engine.trigger(ev); },
     async calendar(year, db) { return { year, demo: true, races: buildDemoCalendar(db, year) }; },
     /** Rennen aus dem Kalender: dessen Streckenlayout laden und ein Demo-Rennen darauf starten. */
     openRace(race, db) {
       const l = race && db && findLayout(db, { circuit_short_name: race.circuit, location: race.location, country_name: race.country, year: race.year }, race.year);
-      engine.setCircuit(l ? { name: l.circuit, points: samplePath(l.d, 300), rotate: l.rotate } : null, race?.meeting);
+      engine.setCircuit(l ? { name: l.circuit, points: samplePath(l.d, 300), rotate: l.rotate, layoutId: l.id } : null, race?.meeting);
       engine.setScenario('race');
       emit?.(); // sofort anzeigen, nicht erst beim nächsten Takt
     },

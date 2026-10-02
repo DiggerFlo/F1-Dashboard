@@ -1,8 +1,8 @@
-import { useState } from 'react';
-import { Alert, Badge, Button, Empty, Popover, Segmented, Select, Switch } from 'antd';
-import { ArrowUpOutlined, AuditOutlined, CarOutlined, CheckCircleFilled, CloudOutlined, FlagFilled, InfoCircleFilled, MenuFoldOutlined, MenuUnfoldOutlined, SettingOutlined, StopOutlined, ThunderboltFilled, ToolOutlined, WarningFilled } from '@ant-design/icons';
+import { useEffect, useRef, useState } from 'react';
+import { Alert, Badge, Button, Empty, Popover, Segmented, Switch } from 'antd';
+import { ArrowUpOutlined, AuditOutlined, CarOutlined, CheckCircleFilled, CloudOutlined, DownOutlined, FlagFilled, InfoCircleFilled, LoadingOutlined, MenuFoldOutlined, MenuUnfoldOutlined, SettingOutlined, StopOutlined, ThunderboltFilled, ToolOutlined, UpOutlined, WarningFilled } from '@ant-design/icons';
 import { fmtTime } from '../../js/format.js';
-import { enginesFor, transcribe } from '../../js/transcribe.js';
+import { engineFor, transcribe } from '../../js/transcribe.js';
 import { Swatch, Avatar, Tyre } from './bits.jsx';
 import { fmtSecs } from '../../js/pitstops.js';
 import { describeRc } from '../../js/racecontrol.js';
@@ -29,11 +29,12 @@ function Face({ d, code }) {
   return <span className="face" style={{ '--ac': safeColor(d?.color) || teamColor(d?.team) || 'var(--line)' }} aria-hidden="true">{(code || '?').slice(0, 3)}</span>;
 }
 
-function Transcript({ st }) {
-  if (!st) return null;
+/** Inhalt des ausgeklappten Transkripts: Wartet noch, läuft (mit Modell-Fortschritt), Fehler oder fertiger Text. */
+function Transcript({ st, onRetry }) {
+  if (!st) return <p className="tr muted" role="status">{t('feed.tr.queued')}</p>;
   if (st.status === 'loading') return <p className="tr muted" role="status">{st.pct != null ? t('feed.tr.loadingModel', { pct: st.pct }) : t('feed.tr.running')}</p>;
-  if (st.status === 'error') return <Alert className="tr" type="warning" showIcon role="alert" message={st.error} />;
-  return <p className="tr"><span className="label">{t('feed.tr.label')}</span><br />{st.text}</p>;
+  if (st.status === 'error') return <Alert className="tr" type="warning" showIcon role="alert" message={st.error} action={<Button size="small" type="link" onClick={onRetry}>{t('feed.tr.retry')}</Button>} />;
+  return <p className="tr">{st.text || t('feed.tr.none')}</p>;
 }
 
 /** Überholung, Boxenstopp oder Ausfall als kompakte Zeile. */
@@ -64,7 +65,7 @@ function EventRow({ m, byCode }) {
   );
 }
 
-function Message({ m, st, onTranscribe, driver, proxy, byCode }) {
+function Message({ m, st, open, onToggle, onRetry, driver, proxy, byCode }) {
   if (ACTIONS.includes(m.kind)) return <EventRow m={m} byCode={byCode} />;
   if (m.kind !== 'radio') {
     const r = describeRc(m);
@@ -91,12 +92,12 @@ function Message({ m, st, onTranscribe, driver, proxy, byCode }) {
       {m.origin && <span className="origin muted">{t('feed.origin', { origin: m.origin })}</span>}
       {(m.url || m.speech) && <RadioPlayer m={m} proxy={proxy} color={safeColor(driver?.color) || teamColor(driver?.team)} />}
       {(m.url || m.speech) && (
-        <Select
-          size="small" variant="borderless" value={null} placeholder={t('feed.tr.placeholder')} aria-label={t('feed.tr.aria')} className="trsel"
-          options={enginesFor(m).map((e) => ({ value: e.id, label: e.label }))} onChange={(v) => v && onTranscribe(m, v)}
-        />
+        <Button type="text" size="small" className={`trtoggle${st?.status === 'error' ? ' err' : ''}`} aria-expanded={open} aria-label={t('feed.tr.aria')} onClick={onToggle}
+          icon={!st || st.status === 'loading' ? <LoadingOutlined /> : st.status === 'error' ? <WarningFilled /> : null}>
+          {t('feed.tr.toggle')}{open ? <UpOutlined /> : <DownOutlined />}
+        </Button>
       )}
-      <Transcript st={st} />
+      {open && (m.url || m.speech) && <Transcript st={st} onRetry={onRetry} />}
     </div>
   );
 }
@@ -105,19 +106,27 @@ function Message({ m, st, onTranscribe, driver, proxy, byCode }) {
  * Seitenleiste mit Funk und Race-Control. Nachrichten haben stabile Keys, damit Audio,
  * offene Dropdowns und Transkripte beim Live-Update erhalten bleiben.
  */
-export function Feed({ items, show = {}, onShow, drivers = [], filter, onFilter, collapsed = false, onToggle, sub, note, proxy = null, getKey = () => null }) {
-  const [tstate, setT] = useState({}); // id -> { status, text, pct, error }
-  const put = (id, v) => setT((s) => ({ ...s, [id]: v }));
+export function Feed({ items, show = {}, onShow, drivers = [], filter, onFilter, collapsed = false, onToggle, sub, note, proxy = null }) {
+  const [tstate, setT] = useState({}); // id -> { status, text, pct, error }; fehlt ein Eintrag, wartet die Nachricht noch in der Schlange
+  const [open, setOpen] = useState({}); // id -> Transkript ausgeklappt
+  const busy = useRef(false);
+  const put = (id, v) => setT((x) => ({ ...x, [id]: v }));
 
-  async function run(m, engine) {
-    put(m.id, { status: 'loading', pct: null });
-    try {
-      const text = await transcribe(engine, m, { proxy, getKey, onProgress: (pct) => put(m.id, { status: 'loading', pct }) });
-      put(m.id, { status: 'done', text: text || '(kein Text erkannt)' });
-    } catch (e) {
-      put(m.id, { status: 'error', error: e.message });
-    }
-  }
+  // Funk wird im Hintergrund transkribiert, eine Nachricht nach der anderen, die neueste zuerst (Whisper im Browser ist schwer, parallel bremst es nur)
+  const queue = items.filter((m) => m.kind === 'radio' && (m.url || m.speech)).slice(0, 60);
+  const queueKey = queue.map((m) => m.id).join(',');
+  useEffect(() => {
+    if (busy.current) return;
+    const next = queue.find((m) => !tstate[m.id]);
+    if (!next) return;
+    busy.current = true;
+    put(next.id, { status: 'loading', pct: null });
+    transcribe(engineFor(next), next, { proxy, onProgress: (pct) => put(next.id, { status: 'loading', pct }) })
+      .then((text) => put(next.id, { status: 'done', text }), (e) => put(next.id, { status: 'error', error: e.message }))
+      .finally(() => { busy.current = false; });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tstate, queueKey]);
+  const retry = (id) => setT((x) => { const { [id]: _drop, ...rest } = x; return rest; });
 
   const byCode = new Map(drivers.map((d) => [d.code, d]));
   const list = items.filter((m) => visible(m, filter, show)).slice(0, 100); // erst filtern, dann kürzen: sonst fehlen ältere Funksprüche trotz Zähler
@@ -143,7 +152,7 @@ export function Feed({ items, show = {}, onShow, drivers = [], filter, onFilter,
       </div>
       <Segmented block size="small" className="seg" options={filters(items, show)} value={filter} onChange={onFilter} aria-label={t('feed.filter')} />
       <div className="sidebody">
-        {list.length ? list.map((m) => <Message key={m.id} m={m} st={tstate[m.id]} onTranscribe={run} driver={byCode.get(m.code)} proxy={proxy} byCode={byCode} />) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t('feed.empty')} />}
+        {list.length ? list.map((m) => <Message key={m.id} m={m} st={tstate[m.id]} open={!!open[m.id]} onToggle={() => setOpen((x) => ({ ...x, [m.id]: !x[m.id] }))} onRetry={() => retry(m.id)} driver={byCode.get(m.code)} proxy={proxy} byCode={byCode} />) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t('feed.empty')} />}
       </div>
       <div className="sidefoot">{note}</div>
     </aside>

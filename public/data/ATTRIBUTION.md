@@ -26,3 +26,8 @@ ganzen Strecke und der Zeitverlust wird nicht angezeigt.
 
 Die Flaggen im Kalender und in der Vorschau stammen aus dem Paket [flag-icons](https://github.com/lipis/flag-icons)
 (MIT-Lizenz, © Panayiotis Lipiridis) und werden lokal mit der App ausgeliefert.
+
+# Kartenhintergrund
+
+Die Ausrichtung der Layouts (`circuit-geo.json`) wurde aus [bacinger/f1-circuits](https://github.com/bacinger/f1-circuits) berechnet (MIT-Lizenz, Streckenverläufe aus OpenStreetMap, © OpenStreetMap-Mitwirkende, ODbL).
+Die Kartenkacheln werden zur Laufzeit von Esri geladen (World Dark Gray Base: Esri, HERE, Garmin, © OpenStreetMap-Mitwirkende; World Imagery: Esri, Maxar, Earthstar Geographics, GIS User Community) und nicht mitgeliefert. Es gelten die Nutzungsbedingungen von Esri.

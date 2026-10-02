@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { fmtClock, splitCountdown } from '../../js/format.js';
 import { t } from '../../js/i18n.js';
 import { sessionLabel } from '../../js/sessions.js';
-import { plannedMinutes } from '../../js/livelock.js';
+import { plannedMinutes, isOver } from '../../js/livelock.js';
 
 /** Flagge (Mast mit wehendem Tuch), Farbe über currentColor; das Tuch wellt sich. */
 const Flag = ({ className = '' }) => (
@@ -39,6 +39,17 @@ export function Countdown({ startsAt, now, label }) {
     return <div className="goanim" role="status"><Flag className="big" /><strong className="disp">{t('up.started')}</strong></div>;
   }
   const elapsed = Math.max(0, -secs);
+  if (isOver(label, elapsed)) {
+    return (
+      <div className="livepanel over" role="status">
+        <Flag />
+        <div className="lpbody">
+          <strong className="disp">{t('up.over', { name: sessionLabel(label) })}</strong>
+          <span className="lpnote">{t('up.overNote')}</span>
+        </div>
+      </div>
+    );
+  }
   const planned = plannedMinutes(label) * 60;
   const pct = Math.min(1, elapsed / planned);
   return (

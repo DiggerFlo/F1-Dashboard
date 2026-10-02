@@ -70,6 +70,21 @@ export function createReplayBuffer({ origin, windowMs = 4 * 60000, maxAge = 1.5 
       }
       return out;
     },
+    /**
+     * Hat sich der Fahrer in [from, to] mit mindestens minSpeed bewegt? null, wenn der Zeitraum nicht vollständig geladen ist oder es keine Daten zum Fahrer gibt.
+     */
+    moved(driver, from, to, minSpeed = 3) {
+      for (let w = startOf(from); w <= to; w += windowMs) if (!windows.has(w)) return null;
+      let any = false;
+      for (const [start, w] of windows) {
+        if (start > to || start + windowMs < from) continue;
+        const arr = w.carData.get(driver);
+        if (!arr) continue;
+        any = true;
+        if (arr.some((x) => x.t >= from && x.t <= to && x.speed >= minSpeed)) return true;
+      }
+      return any ? false : null;
+    },
     /** Zustand zum Zeitpunkt t: je Fahrer die letzten Messwerte (aus dem Fenster von t, sonst dem davor). */
     sample(t) {
       const out = { carData: new Map(), location: new Map(), intervals: new Map(), position: latest(positions, t) };

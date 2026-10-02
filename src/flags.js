@@ -3,7 +3,7 @@ const files = import.meta.glob('../node_modules/flag-icons/flags/4x3/{au,bh,cn,j
 const byCode = Object.fromEntries(Object.entries(files).map(([p, u]) => [p.match(/([a-z]+)\.svg$/)[1], u]));
 
 const ISO = {
-  australia: 'au', bahrain: 'bh', china: 'cn', japan: 'jp', 'saudi arabia': 'sa', 'united states': 'us', usa: 'us', america: 'us', italy: 'it', monaco: 'mc', spain: 'es',
+  australia: 'au', bahrain: 'bh', china: 'cn', japan: 'jp', 'saudi arabia': 'sa', 'united states': 'us', 'united states of america': 'us', usa: 'us', america: 'us', italy: 'it', monaco: 'mc', spain: 'es',
   canada: 'ca', austria: 'at', 'united kingdom': 'gb', uk: 'gb', 'great britain': 'gb', england: 'gb', belgium: 'be', hungary: 'hu', netherlands: 'nl', holland: 'nl',
   azerbaijan: 'az', singapore: 'sg', mexico: 'mx', brazil: 'br', qatar: 'qa', 'united arab emirates': 'ae', uae: 'ae', france: 'fr', germany: 'de', portugal: 'pt',
   turkey: 'tr', turkiye: 'tr', russia: 'ru', 'south korea': 'kr', korea: 'kr', india: 'in', 'south africa': 'za', malaysia: 'my', vietnam: 'vn', argentina: 'ar',

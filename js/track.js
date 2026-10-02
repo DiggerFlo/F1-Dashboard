@@ -127,7 +127,7 @@ export function createCarAnimator() {
       lastT = now;
       const seen = new Set();
       const done = []; // schon zugeordnete Autos: [x, y, Anteil]
-      const on = state.drivers.filter((d) => d.x != null && d.onTrack !== false && !d.pit && d.status !== 'out');
+      const on = state.drivers.filter((d) => d.x != null && d.onTrack !== false && !d.pit && d.status !== 'out' && d.status !== 'dns');
       // Erst Autos mit bekannter Position, dann neue: sie übernehmen den Anteil des nächsten Autos (gleiche Straße),
       // statt an engen Stellen die falsche Straße zu erwischen
       for (const pass of [0, 1]) {
@@ -202,23 +202,33 @@ function bbox(points) {
  * SVG des Streckenlayouts. state.track = { points:[[x,y]...], sectors:[f,...]?, turns:[f,...]? }
  * Fahrer haben x/y im gleichen Koordinatensystem (nur wenn onTrack !== false).
  */
-export function trackSvg(state, selNum, pos = null) {
-  const tr = state.track;
-  if (!tr || !tr.points?.length) return `<div class="empty">${esc(t('map.loading'))}</div>`;
+/**
+ * Ausschnitt der Kartenanzeige: Drehung des Layouts, Punkte danach und viewBox. Der Kartenhintergrund nutzt dieselbe Ansicht,
+ * damit beide Ebenen deckungsgleich liegen. rot = { deg, cx, cy }: Drehung Layout -> Anzeige.
+ */
+export function trackView(tr) {
   const rot = rotator(tr.points, tr.rotate);
   const pts = tr.points.map(rot);
   const b = bbox(pts);
   const pad = Math.max(b.maxX - b.minX, b.maxY - b.minY) * 0.08;
   const vx = b.minX - pad, vy = b.minY - pad;
   const vw = b.maxX - b.minX + pad * 2, vh = b.maxY - b.minY + pad * 2;
-  const unit = Math.max(vw, vh) / 100; // 1 "Einheit" ≈ 1 % der Kartenbreite
+  const [deg, cx, cy] = rot.params.split(' ').map(Number);
+  return { rot, pts, vx, vy, vw, vh, unit: Math.max(vw, vh) / 100, rotation: { deg, cx, cy } }; // unit: 1 "Einheit" ≈ 1 % der Kartenbreite
+}
+
+export function trackSvg(state, selNum, pos = null, opts = {}) {
+  const tr = state.track;
+  if (!tr || !tr.points?.length) return `<div class="empty">${esc(t('map.loading'))}</div>`;
+  const { rot, pts, vx, vy, vw, vh, unit } = trackView(tr);
+  const base = !!opts.base; // Kartenhintergrund darunter: Strecke heller zeichnen, damit sie sich abhebt
   const poly = pts.map((p) => p.map((v) => v.toFixed(1)).join(',')).join(' ');
   const flag = state.flag;
   const sectorMode = !!(tr.marshal?.length && state.sectorFlags);
-  const out = [`<svg viewBox="${vx} ${vy} ${vw} ${vh}" data-rot="${rot.params}" data-unit="${unit}" role="img" aria-label="${esc(t('map.svgLabel'))}">`];
+  const out = [`<svg viewBox="${vx} ${vy} ${vw} ${vh}" style="--ar:${(vw / vh).toFixed(4)}" data-rot="${rot.params}" data-unit="${unit}" role="img" aria-label="${esc(t('map.svgLabel'))}">`];
   const w = unit * 3;
-  out.push(`<polygon points="${poly}" fill="none" stroke="#2e2e37" stroke-width="${w}" stroke-linejoin="round"/>`);
-  out.push(`<polygon points="${poly}" fill="none" stroke="#17171c" stroke-width="${w * 0.75}" stroke-linejoin="round"/>`);
+  out.push(`<polygon points="${poly}" fill="none" stroke="${base ? '#d6d6e0' : '#2e2e37'}" stroke-width="${w}" stroke-linejoin="round"/>`);
+  out.push(`<polygon points="${poly}" fill="none" stroke="${base ? '#0b0b0e' : '#17171c'}"${base ? ' stroke-opacity=".8"' : ''} stroke-width="${w * 0.75}" stroke-linejoin="round"/>`);
   if (flag === 'sc' || flag === 'vsc' || (flag === 'yellow' && !sectorMode)) {
     out.push(`<polygon points="${poly}" fill="none" stroke="#ffcc00" stroke-width="${w * 0.75}" stroke-linejoin="round" opacity=".9"/>`);
     out.push(`<polygon points="${poly}" fill="none" stroke="#17171c" stroke-width="${w * 0.45}" stroke-linejoin="round"/>`);
@@ -248,8 +258,8 @@ export function trackSvg(state, selNum, pos = null) {
   }
   const labelled = new Set(state.drivers.slice(0, flag === 'sc' || flag === 'vsc' || flag === 'red' ? 1 : 3).map((d) => d.num));
   for (const d of state.drivers) if (d.status) labelled.add(d.num);
-  const tagOf = (d) => (d.status === 'out' ? ` ${t('badge.dnf')}` : d.status === 'stopped' ? ` ${t('map.stopTag')}` : '');
-  const cars = state.drivers.filter((d) => d.x != null && d.onTrack !== false && !d.pit && d.status !== 'out'); // Ausgefallene werden ausgeblendet // in der Box: nicht zeigen
+  const tagOf = (d) => (d.status === 'dns' ? ` ${t('badge.dns')}` : d.status === 'out' ? ` ${t('badge.dnf')}` : d.status === 'stopped' ? ` ${t('map.stopTag')}` : '');
+  const cars = state.drivers.filter((d) => d.x != null && d.onTrack !== false && !d.pit && d.status !== 'out' && d.status !== 'dns'); // Ausgefallene und nicht Gestartete werden ausgeblendet // in der Box: nicht zeigen
   const order = [...cars].sort((a, c) => (a.num === selNum) - (c.num === selNum));
   for (const car of order) {
     const at = pos?.get(car.num) || [car.x, car.y];

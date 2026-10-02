@@ -31,3 +31,17 @@ export function sameSession(a, b) {
   const x = canon(sessionId(a)), y = canon(sessionId(b));
   return x != null ? x === y : String(a) === String(b);
 }
+
+/** Tab einer Session: race, sprint, quali, sprintquali oder practice (Namen aus OpenF1 oder der Demo; Sprint-Quali heißt 2023 "Sprint Shootout"). */
+export function sessionKind(name) {
+  const n = String(name || '').toLowerCase();
+  if (n.startsWith('sess.')) { const id = sessionId(name); return id === 'sprintq' ? 'sprintquali' : id === 'sprint' || id === 'quali' || id === 'practice' ? id : id && id.startsWith('fp') ? 'practice' : 'race'; }
+  const sprint = /sprint/.test(n);
+  if (/qualifying|shootout|^s?q\d|^quali/.test(n)) return sprint || /^sq\d/.test(n) ? 'sprintquali' : 'quali';
+  if (sprint) return 'sprint';
+  if (/race|rennen/.test(n)) return 'race';
+  return 'practice';
+}
+
+/** Grundart (race, quali, practice) zu einem Tab: Sprint läuft wie ein Rennen, Sprint-Quali wie eine Quali. */
+export const baseType = (kind) => (kind === 'sprint' ? 'race' : kind === 'sprintquali' ? 'quali' : kind);

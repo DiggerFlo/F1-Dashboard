@@ -4,12 +4,13 @@ import { tracesSvg } from '../../js/track.js';
 import { teamColor } from '../../js/teams.js';
 import { fmtSecs, pitLossNote } from '../../js/pitstops.js';
 import { flagUrl, countryOf } from '../flags.js';
+import { trackZone, zoneName } from '../../js/tz.js';
 import { t, tl, dec, locale } from '../../js/i18n.js';
 import { sessionLabel, sameSession } from '../../js/sessions.js';
 import { useNarrow } from '../useNarrow.js';
 import { useWallNow } from '../useWallNow.js';
 import { Countdown } from './Countdown.jsx';
-import { Html, Tyre, CodeCell, Sector, Bar, Badge, Kpi, Section, Swatch, Face } from './bits.jsx';
+import { Html, Tyre, CodeCell, Sector, Bar, Badge, Kpi, Section, Swatch, Face, Avatar } from './bits.jsx';
 import { StateMap } from './MapCard.jsx';
 
 function kpisFor(state) {
@@ -83,7 +84,7 @@ function TimingTable({ state, sel, onPick }) {
     state.overtake
       ? { title: t('tbl.overtake'), key: 'drs', render: (_, d) => (d.ovt ? <Badge kind="drs">OVT</Badge> : <Badge>—</Badge>) }
       : { title: t('tbl.drs'), key: 'drs', render: (_, d) => (d.drs ? <Badge kind="drs">DRS</Badge> : <Badge>—</Badge>) },
-    { title: t('tbl.status'), key: 'status', render: (_, d) => (d.status === 'out' ? <Badge kind="out">{t('badge.dnf')}</Badge> : d.status === 'stopped' ? <Badge kind="pit">{t('badge.stopped')}</Badge> : d.pit ? <Badge kind="pit">{t('badge.pit')}</Badge> : frozen ? <Badge kind="pit">{t('badge.box')}</Badge> : null) },
+    { title: t('tbl.status'), key: 'status', render: (_, d) => (d.status === 'dns' ? <Badge kind="out">{t('badge.dns')}</Badge> : d.status === 'out' ? <Badge kind="out">{t('badge.dnf')}</Badge> : d.status === 'stopped' ? <Badge kind="pit">{t('badge.stopped')}</Badge> : d.pit ? <Badge kind="pit">{t('badge.pit')}</Badge> : frozen ? <Badge kind="pit">{t('badge.box')}</Badge> : null) },
   ];
   return (
     <Table
@@ -201,14 +202,24 @@ function Upcoming({ state, ui, actions }) {
   const u = state.upcoming || {};
   const wall = useWallNow(state.now, true); // Countdown zählt zwischen den Datenständen weiter
   const live = new Map(state.drivers.map((d) => [d.code, d.color]));
-  const colorOf = (code) => live.get(code) || null; // sonst leitet Swatch die Farbe aus dem Teamnamen ab
+  const colorOf = (code) => live.get(code) || null;
+  const photos = new Map(state.drivers.map((d) => [d.code, d.photo]));
+  const photoOf = (code) => photos.get(code) || null; // Foto aus der geladenen Session, sonst das vom Medienserver abgeleitete // sonst leitet Swatch die Farbe aus dem Teamnamen ab
   const standings = u.standings || [];
   const teams = u.constructors || [];
   const last = u.lastResult;
   const flag = flagUrl(countryOf(u.circuit));
   const nextName = u.nextLabel || '';
   const isNext = (name) => !!nextName && sameSession(name, nextName);
-  const when = (v) => (typeof v === 'number' ? new Date(v).toLocaleString(locale(), { weekday: 'short', hour: '2-digit', minute: '2-digit' }) : v); // Zeitpunkt oder fertiger Text (Demo)
+  // Zeitpunkt oder fertiger Text (Demo); zone: Zeitzone der Strecke, ohne Angabe die des Nutzers
+  const when = (v, zone) => (typeof v === 'number' ? new Date(v).toLocaleString(locale(), { weekday: 'short', hour: '2-digit', minute: '2-digit', ...(zone ? { timeZone: zone } : null) }) : v);
+  const facts = (u.facts || []).filter(([l]) => l !== 'fact.round'); // Laufnummer der Saison lassen wir weg
+  const zone = trackZone(state.track?.layoutId);
+  const sched = u.schedule || [];
+  const timed = sched.some(([, b]) => typeof b === 'number');
+  const split = !!zone && timed; // Ortszeit der Strecke und Zeit des Nutzers getrennt zeigen
+  const t0 = sched.find(([, b]) => typeof b === 'number')?.[1] ?? Date.now();
+  const zl = (z) => zoneName(t0, z, locale());
   const pts = (arr) => Math.max(1, ...arr.map((x) => Number(x.points) || 0));
   const bar = (v, max) => <span className="pbar" aria-hidden="true"><i style={{ width: `${Math.round(((Number(v) || 0) / max) * 100)}%` }} /></span>;
   const maxD = pts(standings), maxT = pts(teams);
@@ -222,42 +233,46 @@ function Upcoming({ state, ui, actions }) {
           <h2 className="big">{u.meeting || '—'}</h2>
           <span className="muted where">{u.circuit || ''}</span>
           {u.startsAt != null && <Countdown startsAt={u.startsAt} now={wall} label={u.nextLabel} />}
-          {(u.facts || []).length > 0 && <div className="facts">{u.facts.map(([l, v]) => <div key={l}><span className="label">{tl(l)}</span><div className="mono fact">{v}</div></div>)}</div>}
+          {facts.length > 0 && <div className="facts">{facts.map(([l, v]) => <div key={l}><span className="label">{tl(l)}</span><div className="mono fact">{v}</div></div>)}</div>}
         </Card>
       </div>
-      <div className="two">
-        {u.schedule?.length > 0 && (
-          <Section title={t('up.weekend')} meta={t('up.localTime')}>
-            <Card className="rows sched">
-              {u.schedule.map(([a, b]) => (
+      <div className="two even">
+        {sched.length > 0 && (
+          <Section title={t('up.weekend')} meta={split ? null : t('up.yourTime')}>
+            <Card className={`rows sched${split ? ' split' : ''}`}>
+              {split && <div className="row head" aria-hidden="true"><span /><span className="label">{t('up.localTime')}<small>{zl(zone)}</small></span><span className="label">{t('up.yourTime')}<small>{zl(undefined)}</small></span></div>}
+              {sched.map(([a, b]) => (
                 <div className={`row${isNext(a) ? ' next' : ''}`} key={a} aria-current={isNext(a) ? 'true' : undefined}>
                   <span className="sname">{sessionLabel(a)}{isNext(a) && <span className="nexttag">{t('up.nextTag')}</span>}</span>
+                  {split && <span className="mono">{when(b, zone)}</span>}
                   <span className="mono">{when(b)}</span>
                 </div>
               ))}
             </Card>
           </Section>
         )}
-        {u.weather?.length > 0 && (
-          <Section title={t('up.weather')} meta={t('up.forecast')}>
-            <div className="wx">{u.weather.map(([a, b]) => <Card className="wxc" key={a} size="small"><span className="label">{tl(a)}</span><span className="mono wxv">{b}</span></Card>)}</div>
-          </Section>
-        )}
+        <div className="stackcol">
+          {last && last.podium.length > 0 && (
+            <Section title={t('up.lastRace', { name: last.name })} meta={t('up.podium')}>
+              <div className="podium stack">
+                {last.podium.map((p) => (
+                  <Card className={`pod p${p.pos}`} key={p.pos} size="small">
+                    <span className="pn">{p.pos}</span>
+                    <span className="pwho"><Swatch color={colorOf(p.code, p.team)} team={p.team} /><span className="code">{p.code}</span>{p.team && <span className="muted pteam"> · {p.team}</span>}</span>
+                    <span className="mono ptime">{p.time}</span>
+                    <span className="ppho"><Avatar d={{ photo: photoOf(p.code) || p.photo, color: colorOf(p.code, p.team), team: p.team }} size={56} /></span>
+                  </Card>
+                ))}
+              </div>
+            </Section>
+          )}
+          {u.weather?.length > 0 && (
+            <Section title={t('up.weather')} meta={t('up.forecast')}>
+              <div className="wx">{u.weather.map(([a, b]) => <Card className="wxc" key={a} size="small"><span className="label">{tl(a)}</span><span className="mono wxv">{b}</span></Card>)}</div>
+            </Section>
+          )}
+        </div>
       </div>
-      {last && last.podium.length > 0 && (
-        <Section title={t('up.lastRace', { name: last.name })} meta={t('up.podium')}>
-          <div className="podium">
-            {last.podium.map((p) => (
-              <Card className={`pod p${p.pos}`} key={p.pos} size="small">
-                <span className="pn">{p.pos}</span>
-                <span className="pwho"><Swatch color={colorOf(p.code, p.team)} team={p.team} /><span className="code">{p.code}</span></span>
-                {p.team && <span className="muted pteam">{p.team}</span>}
-                <span className="mono ptime">{p.time}</span>
-              </Card>
-            ))}
-          </div>
-        </Section>
-      )}
       <div className="two">
       {standings.length > 0 && (
         <Section title={t('up.drivers')} meta={t('up.top10')}>
@@ -295,7 +310,7 @@ function Upcoming({ state, ui, actions }) {
 export function Main({ state, ui, hist, refHist, actions = {} }) {
   const type = state.session.type;
   if (type === 'upcoming') return <Upcoming state={state} ui={ui} actions={actions} />;
-  const ttl = state.flag === 'sc' ? t('main.ttl.sc') : state.flag === 'red' ? t('main.ttl.red') : type === 'quali' ? t('main.ttl.quali') : type === 'practice' ? t('main.ttl.practice') : t('main.ttl.live');
+  const ttl = state.flag === 'sc' ? t('main.ttl.sc') : state.flag === 'red' ? t('main.ttl.red') : state.session.kind === 'sprintquali' ? t('main.ttl.sprintquali') : type === 'quali' ? t('main.ttl.quali') : type === 'practice' ? t('main.ttl.practice') : t('main.ttl.live');
   const kp = kpisFor(state);
   return (
     <>

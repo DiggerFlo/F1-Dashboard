@@ -1,6 +1,7 @@
 // Jolpica F1 (Nachfolger der Ergast-API, https://api.jolpi.ca): Saisonkalender, Wertungen, Ergebnisse.
 // Ergänzt OpenF1, das Live-Timing und Telemetrie liefert, aber keine Meisterschaftsstände.
 import { finishCalendar } from '../calendar.js';
+import { f1Photo } from '../format.js';
 
 const BASE = 'https://api.jolpi.ca/ergast/f1';
 const TTL = 10 * 60 * 1000; // Das Limit liegt bei ca. 500 Anfragen pro Stunde, Wertungen ändern sich selten.
@@ -55,7 +56,7 @@ export function mapLastResult(data) {
   if (!race) return null;
   return {
     name: race.raceName, round: Number(race.round),
-    podium: (race.Results || []).slice(0, 3).map((x) => ({ pos: Number(x.position), code: x.Driver?.code || x.Driver?.familyName, team: x.Constructor?.name || null, time: x.Time?.time || x.status || '' })),
+    podium: (race.Results || []).slice(0, 3).map((x) => ({ pos: Number(x.position), code: x.Driver?.code || x.Driver?.familyName, team: x.Constructor?.name || null, time: x.Time?.time || x.status || '', photo: f1Photo(x.Driver?.givenName, x.Driver?.familyName) })),
   };
 }
 

@@ -9,6 +9,9 @@ const BEFORE = 5, AFTER = 20;
 /** Geplante Dauer einer Session in Minuten (Schätzung nach Art der Session). */
 export const plannedMinutes = (name) => MINUTES[sessionId(name)] ?? 60;
 
+/** Ist die Session schon vorbei? Gilt für als beendet markierte Rennen und für alles, was länger als geplante Dauer plus Nachlauf zurückliegt. */
+export const isOver = (name, elapsedSecs) => sessionId(name) === 'raceDone' || elapsedSecs > (plannedMinutes(name) + AFTER) * 60;
+
 /**
  * Fokus der Vorschau aus dem Zeitplan [[name, ms], ...]: die laufende Session (live: true) oder die nächste.
  * Liefert Felder, die in die Vorschau gemischt werden: nextLabel, startsAt, live. Leer, wenn der Plan keine Zeitpunkte enthält.

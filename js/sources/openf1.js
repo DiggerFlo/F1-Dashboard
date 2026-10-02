@@ -10,7 +10,7 @@ import { createReplayBuffer } from './replay-buffer.js';
 import { createStaticCache, cacheKeyOf } from '../cache.js';
 import { t as tr, locale } from '../i18n.js';
 import { liveSessionNow, looksLikeBlock, focusSession } from '../livelock.js';
-import { sessionLabel } from '../sessions.js';
+import { sessionLabel, sessionKind, baseType } from '../sessions.js';
 import { nearestFraction, aheadOf } from '../track.js';
 import { sectorFlagsFrom, stationaryTime } from '../pit.js';
 
@@ -120,11 +120,7 @@ export function flagFromControl(msgs) {
   return { flag, since };
 }
 
-function sessionType(name = '') {
-  if (/race|sprint$/i.test(name) && !/qualifying|shootout/i.test(name)) return 'race';
-  if (/qualifying|shootout/i.test(name)) return 'quali';
-  return 'practice';
-}
+function sessionType(name = '') { return baseType(sessionKind(name)); }
 
 /**
  * Fasst Vorschau-Daten aus OpenF1 (nächste Session) und Jolpica (Rennen, Wertungen) zusammen.
@@ -161,10 +157,12 @@ export function mergeUpcoming(upcoming, extras, now = Date.now()) {
 export function createOpenF1Source({ token = null, speed = 8, wantType = null, sessionKey = null, jolpica = createJolpica(), client = null, replayOnly = false, circuitInfo = fetchCircuitInfo, cache = createStaticCache() } = {}) {
   let timer = null, stopped = false, onState = null;
   let session = null, upcoming = null, replay = false;
+  let weekend = []; // alle Sessions des Wochenendes der geladenen Session: [{ key, name, kind, start, end }]
   // Wiederholung: virtuelle Uhr (Start, Tempo, Pause) und Puffer mit den geladenen Zeitfenstern
   let clock = { base: 0, at: 0, speed, paused: false, hold: false };
   let buffer = null, weatherRows = [], pits = [], loadingNow = false;
   const stopSince = new Map(), stopCache = new Map(), stopLoading = new Set();
+  const gridSince = new Map(), dnsCache = new Set(), dnsChecked = new Set(); // DNS: Auto, das nach dem Start gar nicht erst losgefahren ist
   let stopBusy = 0; // laufende Einzelabfragen für Standzeiten (die Warteschlange ist knapp: höchstens 28 Anfragen pro Minute) // Ausfälle erkennen, Standzeiten der Boxenstopps
   let lastBuildNow = null;
   const windowLoads = new Map();
@@ -246,7 +244,7 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
       const db = await (await fetch('data/circuits.json')).json();
       if (my !== epoch) return;
       const l = findLayout(db, nextSession, new Date(nextSession.date_start).getFullYear());
-      if (l) track = { points: samplePath(l.d, 300), rotate: l.rotate };
+      if (l) track = { points: samplePath(l.d, 300), rotate: l.rotate, layoutId: l.id };
     } catch { /* Vorschau ohne Layout */ }
   }
 
@@ -268,7 +266,7 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
     let pick = null;
     if (sessionKey) pick = chosen;
     else if (wantType === 'upcoming') pick = null;
-    else if (wantType) pick = [...past].reverse().find((s) => sessionType(s.session_name) === wantType) || null;
+    else if (wantType) pick = [...past].reverse().find((s) => sessionKind(s.session_name) === wantType) || null;
     else pick = live || (next && Date.parse(next.date_start) - now < 4 * 86400000 ? null : past[past.length - 1]) || null;
     if (pick && Date.parse(pick.date_start) > now) { next = pick; pick = null; } // gewähltes Rennen liegt in der Zukunft
     upcoming = next ? { startsAt: Date.parse(next.date_start), nextLabel: next.session_name, meeting: next.location || next.circuit_short_name, circuit: `${next.circuit_short_name || ''} · ${next.country_name || ''}`.trim() } : null;
@@ -276,6 +274,12 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
     const meetingSessions = next ? await get(`sessions?meeting_key=${next.meeting_key}`) : [];
     upcoming = upcoming && { ...upcoming, schedule: meetingSessions.map((s) => [s.session_name, Date.parse(s.date_start)]) };
     session = pick;
+    // Sessions des Wochenendes (für die Auswahl Rennen/Sprint/Quali/...): aus der Jahresliste, sonst eine Anfrage
+    if (pick) {
+      const mine = list.filter((x) => x.meeting_key === pick.meeting_key);
+      const all = mine.length > 1 ? mine : await get(`sessions?meeting_key=${pick.meeting_key}`).catch(() => mine);
+      weekend = all.map((x) => ({ key: x.session_key, name: x.session_name, kind: sessionKind(x.session_name), start: Date.parse(x.date_start), end: Date.parse(x.date_end) })).sort((a, b) => a.start - b.start);
+    } else weekend = [];
     if (pick && Date.parse(pick.date_end) < Date.now() - 3 * 3600000) pastKeys.add(pick.session_key);
     nextSession = next || null;
     if (!session) replay = false;
@@ -299,7 +303,7 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
 
   async function loadStatic() {
     const k = session.session_key;
-    intervals = new Map(); pos = new Map(); carData = new Map(); loc = new Map(); laps = []; stints = []; control = []; radioRows = []; weather = null; weatherRows = []; pits = []; buffer = null; loadingNow = false; windowLoads.clear(); stopCache.clear(); stopLoading.clear(); stopSince.clear();
+    intervals = new Map(); pos = new Map(); carData = new Map(); loc = new Map(); laps = []; stints = []; control = []; radioRows = []; weather = null; weatherRows = []; pits = []; buffer = null; loadingNow = false; windowLoads.clear(); stopCache.clear(); stopLoading.clear(); stopSince.clear(); gridSince.clear(); dnsCache.clear(); dnsChecked.clear();
     const ds = await get(`drivers?session_key=${k}`);
     drivers = new Map(ds.map((d) => [d.driver_number, d]));
     // Streckenlayout: Positionsdaten einer Runde eines Fahrers, auf das Layout aus f1-circuits-svg abgebildet
@@ -325,12 +329,12 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
     } catch { /* ohne Layoutdaten: eigene Umrisslinie */ }
     if (layout) {
       const pts = samplePath(layout.d, 300);
-      track = { points: pts, rotate: layout.rotate, name: layout.circuit };
+      track = { points: pts, rotate: layout.rotate, name: layout.circuit, layoutId: layout.id };
       if (outline) {
         const fit = fitSimilarity(outline, pts);
         if (fit.error < 0.08) toTrack = (x, y) => fit.map(x, y);
         else { track = { points: outline }; layoutNote = true; }
-      } else { track = { points: pts, rotate: layout.rotate }; }
+      } else { track = { points: pts, rotate: layout.rotate, layoutId: layout.id }; }
     } else if (outline) track = { points: outline };
     await addCircuitInfo();
     if (replay) await loadReplayStatic(k);
@@ -458,10 +462,21 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
       const stint = stints.filter((s) => s.driver_number === n && s.lap_start <= (o?.lap || 1) + 1).sort((a, b) => b.stint_number - a.stint_number)[0];
       const secs = o?.last ? [o.last.duration_sector_1, o.last.duration_sector_2, o.last.duration_sector_3] : [null, null, null];
       // Ausfall: steht im Rennen (nicht in der Box, keine rote Flagge) -> nach 4 s "steht", nach 30 s "ausgefallen"
-      const still = raceOn && !inPit && p && c?.speed != null && c.speed <= 2;
+      const standing = !inPit && p && c?.speed != null && c.speed <= 2;
+      const still = raceOn && standing;
+      // Nicht gestartet (DNS): steht auch kurz nach dem Start noch dort, wo es vor dem Start stand. Sofort melden, nicht erst nach 4 s "steht" und 30 s "ausgefallen".
+      // Live: durchgehend still seit vor dem Start. Wiederholung: im Puffer keine Bewegung rund um den Start. Wer später doch losfährt (Boxengasse), ist wieder normal.
+      if (type === 'race' && rs != null && standing) { if (!gridSince.has(n)) gridSince.set(n, now); } else gridSince.delete(n);
+      if (type === 'race' && rs != null && c?.speed > 10) { dnsCache.delete(n); dnsChecked.add(n); }
+      if (type === 'race' && rs != null && standing && now >= rs + 8000 && !dnsCache.has(n) && !dnsChecked.has(n)) {
+        const mv = replay && buffer ? buffer.moved(n, rs - 1000, rs + 8000) : null;
+        if (mv === false || (mv === null && !replay && gridSince.get(n) <= rs + 1000)) dnsCache.add(n);
+        if (mv != null) dnsChecked.add(n);
+      }
+      const dns = dnsCache.has(n) && standing && now >= rs + 8000;
       if (still) { if (!stopSince.has(n)) stopSince.set(n, now); } else stopSince.delete(n);
       const idle = still ? now - stopSince.get(n) : 0;
-      const status = idle >= 30000 ? 'out' : idle >= 4000 ? 'stopped' : null;
+      const status = dns ? 'dns' : idle >= 30000 ? 'out' : idle >= 4000 ? 'stopped' : null;
       return {
         num: n, code: d.name_acronym, name: d.last_name || d.full_name, team: d.team_name || null, color: d.team_colour ? `#${d.team_colour}` : null, photo: safePhoto(d.headshot_url), pos: pos.get(n)?.position ?? 99, gap: iv?.gap_to_leader != null && typeof iv.gap_to_leader === 'number' ? iv.gap_to_leader : null,
         interval: typeof iv?.interval === 'number' ? iv.interval : null, last: o?.last?.lap_duration ?? null, best: o?.best ?? null, sectors: secs,
@@ -485,7 +500,7 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
     // Das Safety Car steht nicht in den Positionsdaten: bei SC knapp vor dem Führenden darstellen (Näherung)
     let safetyCar;
     if (flag === 'sc' && track?.points?.length) {
-      const lead = rows.find((r) => r.x != null && !r.pit && r.status !== 'out');
+      const lead = rows.find((r) => r.x != null && !r.pit && r.status !== 'out' && r.status !== 'dns');
       if (lead) safetyCar = aheadOf(track.points, lead.x, lead.y);
     }
     return {
@@ -494,7 +509,8 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
       problem: errors ? note : '',
       liveLock: errors && liveLock ? liveLock : undefined,
       sourceNote: (replay ? tr('src.note.replay', { who: 'OpenF1', speed: clock.speed, session: session.session_name, place: session.location }) : tr('src.note.live', { session: session.session_name, place: session.location })) + (layoutNote ? ' · ' + tr('src.note.layout') : '') + ' · ' + tr('src.note.credits'),
-      session: { key: session.session_key, type, name: session.session_name, circuit: session.circuit_short_name, lap: leaderLap || null, totalLaps: null, flagSince: since, phase: replay ? 'replay' : 'live', cutoff: type === 'quali' ? 10 : null,
+      weekend,
+      session: { key: session.session_key, type, kind: sessionKind(session.session_name), name: session.session_name, circuit: session.circuit_short_name, lap: leaderLap || null, totalLaps: null, flagSince: since, phase: replay ? 'replay' : 'live', cutoff: type === 'quali' ? 10 : null,
         remaining: type === 'quali' ? Math.max(0, (Date.parse(session.date_end) - now) / 1000) : null },
       startLights: replay && raceStart() ? { startsAt: lightsOut(), now, speed: clock.paused || clock.hold ? 0 : clock.speed, per: Math.min(clock.speed, 4) } : undefined,
       replay: replay ? { start: sessionStart(), end: sessionEnd(), t: now, speed: clock.speed, paused: clock.paused, loading: loadingNow } : undefined,
@@ -563,7 +579,7 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
       else if (nextSession) {
         const db = await (await fetch('data/circuits.json')).json();
         const l = findLayout(db, nextSession, new Date(nextSession.date_start).getFullYear());
-        if (l) track = { points: samplePath(l.d, 300), rotate: l.rotate };
+        if (l) track = { points: samplePath(l.d, 300), rotate: l.rotate, layoutId: l.id };
       }
       if (my !== epoch) return;
     } catch (e) {
@@ -593,6 +609,8 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
       return { year, demo: false, races: of1.value };
     },
     openRace(race) { pickedMeta = race || null; pickedRace = race && race.key == null ? race : null; sessionKey = race?.key ?? null; wantType = null; session = null; track = null; lastSlow = 0; lastMedium = 0; clearTimeout(timer); init(); },
+    /** Eine bestimmte Session öffnen (z. B. Sprint desselben Wochenendes). */
+    openSession(key) { pickedRace = null; pickedMeta = null; sessionKey = key; wantType = null; session = null; track = null; lastSlow = 0; lastMedium = 0; clearTimeout(timer); init(); },
     select(type) { pickedRace = null; pickedMeta = null; sessionKey = null; wantType = type; session = null; track = null; lastSlow = 0; lastMedium = 0; clearTimeout(timer); init(); },
     trigger() {},
     /** Steuerung der Wiederholung: Tempo, Pause, Sprung (Anteil 0..1 der Session). */

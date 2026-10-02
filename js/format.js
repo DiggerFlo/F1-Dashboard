@@ -69,3 +69,17 @@ export function safeColor(c) {
 export function safePhoto(u) {
   try { const x = new URL(String(u)); return x.protocol === 'https:' && x.hostname === 'media.formula1.com' ? x.href : null; } catch { return null; }
 }
+
+/**
+ * Fahrerfoto vom F1-Medienserver aus Vor- und Nachname (Jolpica liefert keine Bild-Adresse). Schema des Servers: Ordner mit
+ * Kennung aus den ersten drei Buchstaben von Vor- und Nachname plus 01, mehrteilige Namen mit Leerzeichen. Gibt es das Bild nicht,
+ * liefert der Server selbst ein neutrales Ersatzbild (d_driver_fallback_image). Ohne Namen null.
+ */
+export function f1Photo(given, family) {
+  const words = (s) => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Za-z\s-]/g, '').split(/[\s-]+/).filter(Boolean);
+  const g = words(given), f = words(family);
+  if (!g.length || !f.length) return null;
+  const id = (g[0].slice(0, 3) + f.join('').slice(0, 3)).toUpperCase();
+  const name = encodeURIComponent(`${g.join(' ')}_${f.join(' ')}`).replace(/%5F/gi, '_');
+  return `https://media.formula1.com/d_driver_fallback_image.png/content/dam/fom-website/drivers/${id[0]}/${id}01_${name}/${id.toLowerCase()}01.png.transform/1col/image.png`;
+}

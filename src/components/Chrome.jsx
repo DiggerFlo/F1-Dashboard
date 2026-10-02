@@ -1,25 +1,33 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Alert, Button, Dropdown, Menu, Segmented, Select, Slider, Spin } from 'antd';
-import { CalendarOutlined, CaretRightFilled, ClockCircleOutlined, FlagOutlined, GlobalOutlined, LockOutlined, PauseOutlined, StepBackwardOutlined, ThunderboltOutlined, ToolOutlined } from '@ant-design/icons';
+import { CalendarOutlined, CaretRightFilled, ClockCircleOutlined, FlagOutlined, GlobalOutlined, LockOutlined, PauseOutlined, StepBackwardOutlined, LeftOutlined, RightOutlined } from '@ant-design/icons';
 import { fmtClock } from '../../js/format.js';
-import { LANGS, setLang, t } from '../../js/i18n.js';
+import { LANGS, setLang, t, locale } from '../../js/i18n.js';
 import { sessionLabel } from '../../js/sessions.js';
+import { isOver } from '../../js/livelock.js';
 import { useWallNow } from '../useWallNow.js';
 import { flagUrl } from '../flags.js';
 import { useLang } from '../useLang.js';
 
-const TABS = ['upcoming', 'race', 'quali', 'practice', 'calendar'];
+const TABS = ['upcoming', 'session', 'calendar'];
+// Arten von Sessions, die unter dem Tab Sessions gewählt werden (Reihenfolge der Auswahl)
+const KINDS = ['race', 'sprint', 'quali', 'sprintquali', 'practice'];
 const LANG_FLAG = { de: 'Germany', en: 'United Kingdom' };
-const TAB_ICON = { upcoming: <ClockCircleOutlined />, race: <FlagOutlined />, quali: <ThunderboltOutlined />, practice: <ToolOutlined />, calendar: <CalendarOutlined /> };
+const TAB_ICON = { upcoming: <ClockCircleOutlined />, session: <FlagOutlined />, calendar: <CalendarOutlined /> };
 // Ansichten, die Sessiondaten von OpenF1 brauchen (Vorschau und Kalender kommen auch ohne aus)
-const NEEDS_SESSION = new Set(['race', 'quali', 'practice']);
+const NEEDS_SESSION = new Set(['session']);
 /**
  * Warum diese Ansichten gerade nicht verfügbar sind: 'live' (Sperre während einer Live-Session), 'down' (OpenF1 antwortet nicht) oder null.
  * Gilt nur ohne Simulation und solange keine Session geladen ist (Vorschau-Zustand mit Meldung).
  */
 const tabBlock = (state, ui) => (!ui.sim && state.session.type === 'upcoming' && (state.liveLock || state.problem) ? (state.liveLock ? 'live' : 'down') : null);
 const blockTip = (why) => t(why === 'live' ? 'nav.blockedLive' : 'nav.blockedDown');
-const activeTab = (state, ui) => (ui.view === 'calendar' ? 'calendar' : ui.pendingType || state.session.type);
+const activeTab = (state, ui) => {
+  if (ui.view === 'calendar') return 'calendar';
+  const k = ui.pendingType || state.session.kind || state.session.type;
+  return KINDS.includes(k) ? 'session' : k;
+};
+const activeKind = (state, ui) => ui.pendingType || state.session.kind || state.session.type;
 
 const Mark = () => (
   <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3h9a6 6 0 0 1 0 12H9v6H4V3Zm5 4v4h4a2 2 0 0 0 0-4H9Z" fill="currentColor" fillRule="evenodd" /><rect x="15" y="17" width="5" height="4" fill="#e8112d" /></svg>
@@ -72,6 +80,7 @@ function Topbar({ state, ui, actions }) {
 /** Navigation am unteren Rand auf kleinen Bildschirmen (die Tabs der Kopfzeile sind dort ausgeblendet). */
 function MobileNav({ state, ui, actions }) {
   const type = activeTab(state, ui);
+  useEffect(() => { document.querySelector('.botnav .on')?.scrollIntoView?.({ inline: 'center', block: 'nearest' }); }, [type]);
   const why = tabBlock(state, ui);
   return (
     <nav className="botnav" aria-label={t('nav.view')}>
@@ -102,7 +111,6 @@ function Banner({ state }) {
   const s = state.session, w = state.weather;
   const pre = s.type === 'upcoming' ? state.upcoming : null;
   const wall = useWallNow(state.now, !!pre); // Vorschau: erkennt den Start auch zwischen zwei Datenständen
-  const lapTxt = s.lap ? `${s.lap}${s.totalLaps ? '/' + s.totalLaps : ''}` : '';
   const since = s.flagSince ? fmtClock((state.now - s.flagSince) / 1000) : '';
   const timed = (s.type === 'quali' || s.type === 'practice') && s.remaining != null;
   const up = s.type === 'upcoming';
@@ -114,7 +122,7 @@ function Banner({ state }) {
     case 'red': st = { cls: 'rd', icon: <FlagIcon />, title: t('banner.red.title'), sub: t('banner.red.sub'), since }; break;
     case 'chequered': st = { cls: 'ch', icon: <ChequeredIcon />, title: t('banner.chequered.title'), sub: t('banner.chequered.sub') }; break;
     default:
-      if (up && pre?.startsAt != null && wall >= pre.startsAt) st = { cls: 'go', icon: <FlagIcon />, title: t('banner.live.title'), sub: sessionLabel(pre.nextLabel), since: fmtClock((wall - pre.startsAt) / 1000) };
+      if (up && pre?.startsAt != null && wall >= pre.startsAt && !isOver(pre.nextLabel, (wall - pre.startsAt) / 1000)) st = { cls: 'go', icon: <FlagIcon />, title: t('banner.live.title'), sub: sessionLabel(pre.nextLabel), since: fmtClock((wall - pre.startsAt) / 1000) };
       else if (up) st = { cls: '', icon: <span className="dot" />, title: t('status.next'), sub: '' };
       else if (w?.rain) st = { cls: 'rn', icon: <RainIcon />, title: t('banner.rain.title'), sub: timed ? t('banner.remaining', { time: fmtClock(s.remaining) }) : t('banner.rain.sub') };
       else st = { cls: 'go', icon: <FlagIcon />, title: t('banner.green.title'), sub: timed ? t('banner.remaining', { time: fmtClock(s.remaining) }) : t('banner.green.sub') };
@@ -127,7 +135,6 @@ function Banner({ state }) {
       {st.sub && <span className="sub">{st.sub}</span>}
       <span className="sp" />
       {st.since && chip(t('chip.since'), st.since)}
-      {lapTxt && chip(t('chip.lap'), lapTxt)}
       {w && chip(t('chip.air'), `${w.air} °C`)}
       {w && chip(t('chip.track'), `${w.track} °C`)}
       {w && chip(w.rain ? t('chip.rain') : t('chip.dry'), w.rain ? t('chip.wet') : t('chip.dryValue'), w.rain ? ' wet' : '')}
@@ -149,37 +156,75 @@ function DemoToolbar({ actions }) {
 const SPEEDS = [1, 2, 4, 8];
 
 /** Steuerung der Wiederholung einer echten Session: Pause, Tempo, Sprung auf der Zeitleiste. */
-/** Abspielbare Rennen (beendet oder laufend, mit OpenF1-Session), nach Saison gruppiert, neueste zuerst. */
+/** Abspielbare Rennwochenenden (Race-Session beendet oder laufend), nach Saison gruppiert, neueste zuerst. */
 function raceOptions(seasons = {}) {
+  const fmt = new Intl.DateTimeFormat(locale(), { day: 'numeric', month: 'short' });
   return Object.keys(seasons).sort((a, b) => b - a).map((y) => ({
     label: y,
-    options: seasons[y].filter((r) => r.key != null && r.status !== 'upcoming').reverse().map((r) => ({ value: r.key, label: `R${r.round} · ${r.meeting}`, race: r })),
+    options: seasons[y].filter((r) => r.key != null && r.status !== 'upcoming').reverse().map((r) => {
+      const flag = flagUrl(r.country);
+      const text = `R${r.round} · ${r.meeting}`;
+      return { value: r.key, text, search: `${text} ${r.country || ''} ${r.location || ''}`, race: r, label: <span className="ropt">{flag ? <img className="lflag" src={flag} alt="" /> : <i className="lflag" />}<span className="rname">{text}</span><span className="rdate mono">{fmt.format(r.start)}</span></span> };
+    }),
   })).filter((g) => g.options.length);
 }
 
+/** Auswahl unter dem Tab Sessions: links das Rennwochenende (mit Blättern), rechts die Session, es gibt nur, was es an dem Wochenende gibt. */
+function SessionNav({ state, ui, actions }) {
+  const kind = activeKind(state, ui);
+  const weekend = state.weekend || [];
+  const now = Date.now();
+  const target = (k) => { // Session der Art im Wochenende: beim Training die jüngste begonnene, sonst die erste
+    const list = weekend.filter((x) => x.kind === k);
+    if (!list.length) return null;
+    return k === 'practice' ? [...list].reverse().find((x) => x.start <= now) || list[0] : list[0];
+  };
+  const known = !ui.sim && weekend.length > 0;
+  const kinds = ui.sim ? KINDS : known ? KINDS.filter((k) => target(k) || k === kind) : ['race', 'quali', 'practice'];
+  const options = kinds.map((k) => {
+    const tg = known ? target(k) : null;
+    const future = tg && tg.start > now && k !== kind;
+    return { value: k, disabled: !!future, label: <span title={future ? t('sn.notYet') : undefined}>{t(`tab.${k}`)}</span> };
+  });
+  const groups = state.replay && !ui.sim ? raceOptions(ui.seasons) : [];
+  const flat = groups.flatMap((g) => g.options); // neueste zuerst
+  const raceKey = weekend.find((x) => x.kind === 'race')?.key ?? state.session.key;
+  const idx = flat.findIndex((o) => o.value === raceKey);
+  const go = (o) => o && actions.openRace?.(o.race);
+  const current = [state.session.circuit].filter(Boolean).join(' · ') || t('rb.pick');
+  return (
+    <div className="sessnav" role="toolbar" aria-label={t('sn.aria')}>
+      {state.replay && !ui.sim && (
+        <div className="sn-race">
+          <Button size="small" icon={<LeftOutlined />} disabled={idx < 0 || idx >= flat.length - 1} onClick={() => go(flat[idx + 1])} aria-label={t('sn.older')} title={idx >= 0 && flat[idx + 1] ? flat[idx + 1].text : undefined} />
+          <Select
+            size="small" className="raceselect" showSearch optionFilterProp="search" value={idx >= 0 ? raceKey : undefined} placeholder={current}
+            options={groups} onOpenChange={(o) => o && actions.loadSeasons?.()} onChange={(_, o) => actions.openRace?.(o.race)}
+            notFoundContent={t('rb.noRaces')} aria-label={t('rb.raceAria')} popupMatchSelectWidth={false}
+          />
+          <Button size="small" icon={<RightOutlined />} disabled={idx <= 0} onClick={() => go(flat[idx - 1])} aria-label={t('sn.newer')} title={idx > 0 ? flat[idx - 1].text : undefined} />
+        </div>
+      )}
+      <Segmented className="sn-kinds" size="small" value={kind} options={options} aria-label={t('sn.kind')}
+        onChange={(k) => actions.session?.(k, known ? target(k)?.key ?? null : null)} />
+    </div>
+  );
+}
+
 /** Transportleiste der Wiederholung: Wiedergabe und Tempo, Session, Zeitleiste mit Zeit links und rechts. */
-function ReplayBar({ replay, session, seasons, actions }) {
+function ReplayBar({ replay, actions }) {
   const [drag, setDrag] = useState(null);
   const span = Math.max(1, replay.end - replay.start);
   const frac = Math.min(1, Math.max(0, (replay.t - replay.start) / span));
   const shown = drag ?? frac * 1000;
   const speeds = SPEEDS.includes(replay.speed) ? SPEEDS : [...SPEEDS, replay.speed].sort((a, b) => a - b);
   const at = (v) => fmtClock(((v / 1000) * span) / 1000);
-  const current = [session.name ? sessionLabel(session.name) : null, session.circuit].filter(Boolean).join(' · ') || t('rb.pick');
   return (
     <div className="demo replaybar" role="toolbar" aria-label={t('rb.toolbar')}>
       <div className="rb-ctl">
         <Button className="rb-play" type="primary" shape="circle" icon={replay.paused ? <CaretRightFilled /> : <PauseOutlined />} onClick={() => actions.replay?.pause(!replay.paused)} aria-label={replay.paused ? t('rb.resume') : t('rb.pause')} />
         <Button className="rb-sq" icon={<StepBackwardOutlined />} onClick={() => actions.replay?.seek(0)} aria-label={t('rb.toStart')} title={t('rb.toStartTitle')} />
         <Segmented className="rb-speed" size="small" value={replay.speed} options={speeds.map((v) => ({ value: v, label: `${v}×` }))} onChange={(v) => actions.replay?.speed(v)} aria-label={t('rb.speed')} />
-      </div>
-      <div className="rb-sess">
-        <span className="label">{t('rb.session')}</span>
-        <Select
-          size="small" className="raceselect" showSearch optionFilterProp="label" value={session.key} labelRender={() => current}
-          options={raceOptions(seasons)} onOpenChange={(o) => o && actions.loadSeasons?.()} onChange={(_, o) => actions.openRace?.(o.race)}
-          notFoundContent={t('rb.noRaces')} aria-label={t('rb.raceAria')} popupMatchSelectWidth={false}
-        />
       </div>
       <div className="rb-time">
         <span className="mono rb-now">{at(shown)}</span>
@@ -212,7 +257,8 @@ export function Chrome({ state, ui, actions = {} }) {
     <>
       <h1 className="sr-only">{t('app.title')}</h1>
       <Topbar state={state} ui={ui} actions={actions} />
-      {ui.view === 'calendar' ? null : state.replay ? <ReplayBar replay={state.replay} session={state.session} seasons={ui.seasons} actions={actions} /> : ui.sim && <DemoToolbar actions={actions} />}
+      {ui.view !== 'calendar' && activeTab(state, ui) === 'session' && <SessionNav state={state} ui={ui} actions={actions} />}
+      {ui.view === 'calendar' ? null : state.replay ? <ReplayBar replay={state.replay} actions={actions} /> : ui.sim && <DemoToolbar actions={actions} />}
       {state.liveLock ? <LiveLock lock={state.liveLock} /> : state.problem && <Alert className="problem" type="warning" showIcon banner role="alert" message={state.problem} />}
       {ui.view !== 'calendar' && <Banner state={state} />}
       <MobileNav state={state} ui={ui} actions={actions} />

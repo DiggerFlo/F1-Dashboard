@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { Button, Card, Segmented } from 'antd';
-import { BorderOutlined, ColumnWidthOutlined, FullscreenExitOutlined, FullscreenOutlined } from '@ant-design/icons';
-import { trackSvg } from '../../js/track.js';
+import { Button, Card, Dropdown, Segmented } from 'antd';
+import { BorderOutlined, ColumnWidthOutlined, EnvironmentOutlined, FullscreenExitOutlined, FullscreenOutlined } from '@ant-design/icons';
+import { trackSvg, trackView } from '../../js/track.js';
 import { LIGHTS, lightsFor, isRaceLabel } from '../../js/startlights.js';
 import { Html, Swatch } from './bits.jsx';
+import { Basemap } from './Basemap.jsx';
+import { STYLES, STYLE_IDS } from '../../js/basemap.js';
 import { t, dec } from '../../js/i18n.js';
 
 const modes = () => [
@@ -47,11 +49,30 @@ function PitBox({ drivers, now }) {
   );
 }
 
-export function MapCard({ html, label, circuit, mode = 'normal', onMode, overlay, lights, lap, pitbox }) {
+/** Schalter für den Kartenhintergrund: Aus, Karte, Satellit. */
+function BaseMenu({ value, onChange }) {
+  const items = ['off', ...STYLE_IDS].map((k) => ({ key: k, label: t(`map.base.${k}`) }));
+  return (
+    <Dropdown trigger={['click']} placement="bottomRight" menu={{ items, selectable: true, selectedKeys: [value], onClick: ({ key }) => onChange?.(key) }}>
+      <Button className={`mbase${value !== 'off' ? ' on' : ''}`} type="text" size="small" icon={<EnvironmentOutlined />} aria-label={`${t('map.base')}: ${t(`map.base.${value}`)}`} title={t('map.base')} />
+    </Dropdown>
+  );
+}
+
+export function MapCard({ html, label, circuit, mode = 'normal', onMode, overlay, lights, pitbox, basemap, baseCtl, ar = 1.5 }) {
   const ref = useRef(null);
   const [native, setNative] = useState(false);
   const [fake, setFake] = useState(false);
   const full = native || fake;
+  // Seitenspalte (links, Bedienelemente untereinander) nur, wenn die Karte breit genug ist: 8 rem für die Spalte plus 28 rem Streckenhöhe mal Seitenverhältnis
+  const [side, setSide] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof ResizeObserver === 'undefined') return undefined;
+    const ro = new ResizeObserver(([e]) => setSide(e.contentRect.width >= (8 + 28 * ar) * (parseFloat(getComputedStyle(document.documentElement).fontSize) || 16)));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [ar]);
 
   useEffect(() => {
     const onChange = () => setNative(document.fullscreenElement === ref.current);
@@ -70,20 +91,24 @@ export function MapCard({ html, label, circuit, mode = 'normal', onMode, overlay
   }
 
   return (
-    <Card className={`map${full ? ' is-full' : ''}`} ref={ref} actions={pitbox ? [pitbox] : undefined}>
+    <Card className={`map${full ? ' is-full' : ''}${side ? ' sidecol' : ''}`} ref={ref} actions={pitbox ? [pitbox] : undefined}>
       <div className="cap mhead">
         <div className="mtitle">
           <span className="mname">{label}</span>
-          {lap && <span className="mlap mono">{lap}</span>}
           {circuit && <span className="mcirc">{circuit}</span>}
         </div>
         {lights}
         <div className="mapctl">
-          {onMode && <Segmented className="msize" size="small" value={mode} options={modes()} onChange={onMode} aria-label={t('map.size')} />}
+          {baseCtl && <BaseMenu value={baseCtl.value} onChange={baseCtl.onChange} />}
+          {onMode && <Segmented className="msize" size="small" vertical={side && !full} value={mode} options={modes()} onChange={onMode} aria-label={t('map.size')} />}
           <Button className="mfull" type="text" size="small" icon={full ? <FullscreenExitOutlined /> : <FullscreenOutlined />} onClick={toggleFull} aria-label={full ? t('map.fullscreenExit') : t('map.fullscreen')} title={full ? t('map.fullscreenExitEsc') : t('map.fullscreen')} />
         </div>
       </div>
-      <Html html={html} />
+      <div className={`mapstack${basemap ? ' has-base' : ''}`}>
+        {basemap}
+        <Html html={html} className="mapfg" />
+      </div>
+      {basemap && <span className="mapattr">© <a href="https://www.esri.com" target="_blank" rel="noopener noreferrer">{STYLES[baseCtl?.value]?.attr || 'Esri'}</a></span>}
       {full && overlay && <div className="fs-leaders">{overlay}</div>}
     </Card>
   );
@@ -93,11 +118,18 @@ export function MapCard({ html, label, circuit, mode = 'normal', onMode, overlay
 export function StateMap({ state, ui, actions = {}, overlay }) {
   const up = state.session.type === 'upcoming';
   const type = state.session.type;
-  const label = up ? t('map.layout') : type === 'quali' ? t('tab.quali') : type === 'practice' ? t('tab.practice') : t('tab.race');
-  const lap = !up && type === 'race' && state.session.lap ? (state.session.totalLaps ? t('map.lapOf', { lap: state.session.lap, total: state.session.totalLaps }) : t('kpi.lapN', { lap: state.session.lap })) : null;
+  const label = up ? t('map.layout') : t(`tab.${state.session.kind || type}`);
   const circuit = up ? state.upcoming?.circuit || '' : state.session.circuit || '';
   const u = state.upcoming;
   const sl = state.startLights; // Demo-Rennen: Ampel mit Wanduhr-Zeiten
   const lights = sl ? <StartLights startsAt={sl.startsAt} now={sl.now} speed={sl.speed} per={sl.per} /> : up && u?.startsAt && isRaceLabel(u.nextLabel) ? <StartLights startsAt={u.startsAt} now={state.now} /> : null;
-  return <MapCard html={up ? trackSvg(state, null) : trackSvg(state, ui.sel, ui.pos)} label={label} circuit={circuit} lap={lap} pitbox={!up ? <PitBox drivers={state.drivers} now={state.now} /> : null} mode={ui.mapMode} onMode={actions.mapMode} overlay={overlay} lights={lights} />;
+  // Kartenhintergrund nur, wenn die Strecke ein ausgerichtetes Layout hat (circuit-geo.json) und er nicht ausgeschaltet ist
+  const geoEntry = state.track?.layoutId ? ui.geo?.[state.track.layoutId] : null;
+  const style = ui.basemap || 'map';
+  const showBase = !!geoEntry && style !== 'off';
+  const basemap = showBase ? <Basemap track={state.track} geo={geoEntry} style={style} /> : null;
+  const baseCtl = geoEntry ? { value: style, onChange: actions.basemap } : null;
+  const view = state.track?.points?.length ? trackView(state.track) : null;
+  const ar = view ? view.vw / view.vh : 1.5;
+  return <MapCard html={up ? trackSvg(state, null, null, { base: showBase }) : trackSvg(state, ui.sel, ui.pos, { base: showBase })} label={label} circuit={circuit} pitbox={!up ? <PitBox drivers={state.drivers} now={state.now} /> : null} mode={ui.mapMode} onMode={actions.mapMode} overlay={overlay} lights={lights} basemap={basemap} baseCtl={baseCtl} ar={ar} />;
 }
