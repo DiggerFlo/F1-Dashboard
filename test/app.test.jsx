@@ -1020,11 +1020,11 @@ test('navigation: race, quali and practice are disabled while OpenF1 provides no
   const base = { session: { type: 'upcoming' }, flag: 'green', now: 1, drivers: [], track: null, upcoming: {} };
   const locked = { ...base, liveLock: { name: 'Training 1', meeting: 'X' }, problem: 'x' };
   const out = chrome(locked, { sel: 1, sim: false });
-  assert.equal((out.match(/ant-menu-item-disabled/g) || []).length, 5, 'Rennen, Sprint, Qualifying, Sprint-Quali, Training');
-  assert.equal((out.match(/<button[^>]*disabled/g) || []).length, 5, 'auch in der unteren Navigationsleiste');
+  assert.equal((out.match(/ant-menu-item-disabled/g) || []).length, 1, 'Sessions');
+  assert.equal((out.match(/<button[^>]*disabled/g) || []).length, 1, 'auch in der unteren Navigationsleiste');
   assert.ok(out.includes('wegen einer Live-Session gesperrt'));
   const down = chrome({ ...base, problem: 'OpenF1 nicht erreichbar' }, { sel: 1, sim: false });
-  assert.equal((down.match(/ant-menu-item-disabled/g) || []).length, 5);
+  assert.equal((down.match(/ant-menu-item-disabled/g) || []).length, 1);
   assert.ok(down.includes('OpenF1 antwortet nicht'));
   // Simulation, normaler Betrieb und geladene Session: nichts gesperrt
   assert.ok(!chrome(locked, { sel: 1, sim: true }).includes('ant-menu-item-disabled'), 'Simulation');
@@ -1227,4 +1227,32 @@ test('Fahrerfoto aus Namen: Schema des F1-Medienservers, mehrteilige Namen mit L
   assert.ok(last.podium[0].photo.includes('LANNOR01'));
   const st = { session: { type: 'upcoming' }, now: Date.now(), drivers: [], track: null, upcoming: { startsAt: Date.now() + 1e7, nextLabel: 'Race', meeting: 'X', circuit: 'Y · Z', schedule: [], lastResult: last } };
   assert.ok(html(<Main state={st} ui={{ sel: 1 }} />).includes('LANNOR01'), 'Podium zeigt das Foto');
+});
+
+test('Navigation: ein Tab Sessions, Auswahl nur mit vorhandenen Sessions des Wochenendes', () => {
+  const base = { flag: 'green', now: Date.now(), drivers: [], track: null };
+  const wk = (names) => names.map(([name, kind, d], i) => ({ key: 10 + i, name, kind, start: Date.now() + d * 3600000, end: Date.now() + (d + 1) * 3600000 }));
+  const st = (kind, weekend) => ({ ...base, session: { type: kind === 'sprint' ? 'race' : kind, kind, key: 12 }, weekend });
+  const sprintWeekend = wk([['Practice 1', 'practice', -50], ['Sprint Qualifying', 'sprintquali', -40], ['Sprint', 'sprint', -26], ['Qualifying', 'quali', -24], ['Race', 'race', -2]]);
+  const normalWeekend = wk([['Practice 1', 'practice', -50], ['Practice 2', 'practice', -45], ['Practice 3', 'practice', -26], ['Qualifying', 'quali', -24], ['Race', 'race', -2]]);
+  const a = chrome(st('race', sprintWeekend), { sel: 1, sim: false });
+  assert.equal((a.match(/ant-menu-item(?!-)/g) || []).length, 3, 'Vorschau, Sessions, Kalender');
+  assert.ok(a.includes('Sprint-Quali') && a.includes('>Sprint<') && a.includes('Qualifying') && a.includes('Training') && a.includes('Rennen'), 'Sprint-Wochenende: alle Arten');
+  const b = chrome(st('race', normalWeekend), { sel: 1, sim: false });
+  assert.ok(!b.includes('Sprint-Quali') && !b.includes('>Sprint<'), 'ohne Sprint keine Sprint-Optionen');
+  const future = wk([['Practice 1', 'practice', -2], ['Race', 'race', 40]]);
+  assert.ok(chrome(st('practice', future), { sel: 1, sim: false }).includes('ant-segmented-item-disabled'), 'Race hat noch nicht begonnen');
+  assert.ok(chrome(st('race', undefined), { sel: 1, sim: true }).includes('Sprint-Quali'), 'Simulation zeigt alle Arten');
+});
+
+test('Navigation: Rennauswahl mit Flagge, Blättern und Auswahl der Session in der Wiederholung', () => {
+  const t0 = Date.parse('2025-06-15T12:00:00Z');
+  const seasons = { 2025: [{ round: 1, meeting: 'Alt GP', key: 5, status: 'done', country: 'Italy', start: t0 - 1e9 }, { round: 2, meeting: 'Mitte GP', key: 6, status: 'done', country: 'Canada', start: t0 - 5e8 }, { round: 3, meeting: 'Neu GP', key: 7, status: 'done', country: 'Spain', start: t0 }] };
+  const weekend = [{ key: 6, name: 'Race', kind: 'race', start: t0 - 5e8, end: t0 - 5e8 + 7e6 }, { key: 5, name: 'Sprint', kind: 'sprint', start: t0 - 5e8 - 1e6, end: t0 - 5e8 - 1e5 }];
+  const state = { session: { type: 'race', kind: 'race', key: 6, circuit: 'Montreal' }, flag: 'green', now: t0, drivers: [], track: null, weekend, replay: { t: t0, start: t0 - 1e6, end: t0 + 1e6, speed: 1, paused: false } };
+  const out = chrome(state, { sel: 1, sim: false, seasons });
+  assert.ok(out.includes('sn-race') && out.includes('aria-label="Vorheriges Rennwochenende"') && out.includes('aria-label="Nächstes Rennwochenende"'), 'Blättern');
+  assert.ok(out.includes('>Sprint<') && !out.includes('Sprint-Quali'), 'nur vorhandene Sessions');
+  assert.ok(!out.includes('rb-sess'), 'Auswahl wohnt nicht mehr in der Transportleiste');
+  assert.ok(out.includes('replaybar'), 'Transportleiste bleibt');
 });

@@ -96,7 +96,9 @@ Die Kacheln kommen live von den Esri-Servern (`server.arcgisonline.com`, ohne Sc
 
 ## Sprint-Wochenenden
 
-Sprint und Sprint-Quali haben eigene Tabs (neben Rennen und Qualifying) und laufen sonst wie ihre großen Geschwister: Der Sprint zeigt Spitzengruppe, Boxengasse und Überholhinweise, die Sprint-Quali die Cut-Off-Linie. OpenF1 liefert die Sessions als "Sprint", "Sprint Qualifying" bzw. 2023 "Sprint Shootout"; die Zuordnung steht in `sessionKind` in `js/sessions.js`. In der Demo gibt es beide als Szenario: der Sprint über 19 Runden ohne Boxenstopps, die Sprint-Quali als SQ2 mit 10 Minuten.
+Die Navigation hat drei Punkte: Vorschau, **Sessions** und Kalender. Unter Sessions wählt man links das Rennwochenende (Suche, Flagge, Datum, Blättern zum vorherigen und nächsten) und rechts die Art der Session: Rennen, Sprint, Qualifying, Sprint-Quali, Training. Es gibt nur, was es am Wochenende gibt (OpenF1: `sessions?meeting_key=`); Sprint und Sprint-Quali erscheinen also nur bei Sprint-Wochenenden, noch nicht begonnene Sessions sind abgeblendet. Beim Training öffnet sich die jüngste begonnene Session (Training 1, 2 oder 3). Sprint und Sprint-Quali laufen sonst wie ihre großen Geschwister: Der Sprint zeigt Spitzengruppe, Boxengasse und Überholhinweise, die Sprint-Quali die Cut-Off-Linie. OpenF1 liefert die Sessions als "Sprint", "Sprint Qualifying" bzw. 2023 "Sprint Shootout"; die Zuordnung steht in `sessionKind` in `js/sessions.js`. In der Demo gibt es beide als Szenario: der Sprint über 19 Runden ohne Boxenstopps, die Sprint-Quali als SQ2 mit 10 Minuten.
+
+Die Podiumsplätze des letzten Rennens in der Vorschau zeigen das Fahrerfoto vom F1-Medienserver (Adresse aus Vor- und Nachname abgeleitet, `f1Photo` in `js/format.js`, ohne OpenF1). Gibt es kein Bild, liefert der Server ein neutrales Ersatzbild.
 
 ## Funk abspielen und transkribieren
 
