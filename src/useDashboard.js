@@ -57,7 +57,9 @@ export function useDashboard() {
   };
   useEffect(() => () => clearTimeout(pendTimer.current), []);
   const [mapMode, setMapMode] = useState(() => { try { const m = params.get('map') || localStorage.getItem('pitwall.map'); return m === 'wide' ? 'wide' : 'normal'; } catch { return 'normal'; } });
-  const [driverPanel, setDriverPanel] = useState(() => { try { return localStorage.getItem('pitwall.driver') !== 'closed'; } catch { return true; } });
+  // Fahrer-Ansicht: 'side' = Reiter neben den Ereignissen in der Seitenleiste, 'below' = unter der Tabelle. sideTab: welcher Reiter in der Seitenleiste offen ist.
+  const [dock, setDock] = useState(() => { try { return localStorage.getItem('pitwall.dock') === 'below' ? 'below' : 'side'; } catch { return 'side'; } });
+  const [sideTab, setSideTab] = useState(() => { try { return localStorage.getItem('pitwall.sidetab') === 'driver' ? 'driver' : 'events'; } catch { return 'events'; } });
   const [feedOpen, setFeedOpen] = useState(() => { try { return localStorage.getItem('pitwall.feed') !== 'closed'; } catch { return true; } });
 
   useEffect(() => {
@@ -166,9 +168,11 @@ export function useDashboard() {
     },
     year(y) { yearRef.current = y; setYear(y); loadCalendar(y); },
     openRace(race) { startPending({ type: null, label: race?.meeting || 'tab.race' }); setView(null); source.openRace(race, db); },
-    pick: setSel,
+    // Wer einen Fahrer wählt, will ihn sehen: ist die Fahrer-Ansicht in der Seitenleiste, springt sie auf den Reiter Fahrer
+    pick(num) { setSel(num); if (dock === 'side') { setSideTab('driver'); try { localStorage.setItem('pitwall.sidetab', 'driver'); } catch { /* optional */ } } },
     loadSeasons: () => loadSeasons(yearsFor()),
-    toggleDriverPanel() { setDriverPanel((o) => { try { localStorage.setItem('pitwall.driver', o ? 'closed' : 'open'); } catch { /* optional */ } return !o; }); },
+    sideTab(v) { setSideTab(v); try { localStorage.setItem('pitwall.sidetab', v); } catch { /* optional */ } },
+    dock(v) { setDock(v); try { localStorage.setItem('pitwall.dock', v); } catch { /* optional */ } },
     toggleFeed() { setFeedOpen((o) => { try { localStorage.setItem('pitwall.feed', o ? 'closed' : 'open'); } catch { /* optional */ } return !o; }); },
     basemap(id) { setBasemap(id); try { localStorage.setItem('pitwall.basemap', id); } catch { /* optional */ } },
     mapMode(m) { setMapMode(m); try { localStorage.setItem('pitwall.map', m); } catch { /* optional */ } },
@@ -184,6 +188,6 @@ export function useDashboard() {
   };
 
   const loading = pending ? { label: pending.label } : view === 'calendar' && !cal ? { label: TAB_LABEL.calendar } : null;
-  const ui = { geo, basemap, events, show, loading, pendingType: pending?.type || null, seasons, feedOpen, driverPanel, sideDriver: driverPanel && feedOpen && view !== 'calendar' && !!state && state.session.type !== 'upcoming' && state.drivers.length > 0, mapMode, cinema: mapMode === 'wide' && view !== 'calendar' && !!state?.track?.points?.length, sel: selected, filter, demo: source.demo, sim: !!source.sim, view, year, cal, db, pos: animator.sample(performance.now()) };
+  const ui = { geo, basemap, events, show, loading, pendingType: pending?.type || null, seasons, feedOpen, dock, sideTab, sideDriver: dock === 'side' && feedOpen && view !== 'calendar' && !!state && state.session.type !== 'upcoming' && state.drivers.length > 0, mapMode, cinema: mapMode === 'wide' && view !== 'calendar' && !!state?.track?.points?.length, sel: selected, filter, demo: source.demo, sim: !!source.sim, view, year, cal, db, pos: animator.sample(performance.now()) };
   return { state, ui, actions, hist, animator, params };
 }

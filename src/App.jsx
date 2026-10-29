@@ -62,8 +62,8 @@ export function App() {
         <Layout.Content className="main" id="mainc" tabIndex={-1}>
           {ui.view === 'calendar' ? <Calendar cal={ui.cal} ui={ui} db={ui.db} actions={actions} /> : <Main state={state} ui={ui} hist={hist} refHist={refHist} actions={actions} />}
         </Layout.Content>
-        {hasFeed && <Feed items={[...state.feed, ...ui.events].sort((a, b) => b.t - a.t)} show={ui.show} onShow={actions.showKind} drivers={state.drivers} filter={ui.filter} onFilter={actions.filter} collapsed={!ui.feedOpen} onToggle={actions.toggleFeed} sub={sub} note={state.sourceNote || ''} proxy={params.get('proxy') ?? 'local'}>
-          {state.drivers.length > 0 && <DriverPanel state={state} sel={ui.sel} hist={hist} refHist={refHist} open={ui.driverPanel} onToggle={actions.toggleDriverPanel} />}
+        {hasFeed && <Feed items={[...state.feed, ...ui.events].sort((a, b) => b.t - a.t)} show={ui.show} onShow={actions.showKind} drivers={state.drivers} filter={ui.filter} onFilter={actions.filter} collapsed={!ui.feedOpen} onToggle={actions.toggleFeed} sub={sub} note={state.sourceNote || ''} proxy={params.get('proxy') ?? 'local'} sideTab={ui.sideTab} onSideTab={actions.sideTab} sel={state.drivers.find((d) => d.num === ui.sel)?.code}>
+          {ui.sideDriver && <DriverPanel state={state} sel={ui.sel} hist={hist} refHist={refHist} onDock={() => actions.dock('below')} />}
         </Feed>}
       </div>
       <footer className="foot">

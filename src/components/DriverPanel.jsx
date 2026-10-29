@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Button, Segmented } from 'antd';
-import { DownOutlined, UpOutlined } from '@ant-design/icons';
+import { VerticalAlignBottomOutlined } from '@ant-design/icons';
 import { fmtLap, fmtGap, safeColor } from '../../js/format.js';
 import { tracesSvg } from '../../js/track.js';
 import { teamColor, tyreInfo } from '../../js/teams.js';
@@ -149,7 +149,7 @@ export function LiveTab({ d, state, hist, refHist, color }) {
  * Fahrer-Panel unter den Ereignissen in der Seitenleiste: Live-Werte (Gas, Bremse, Drehzahl, Verlauf) und Reifen
  * (Stint-Länge, Reifenalter, Abbau pro Runde). Folgt dem in Tabelle, Spitzengruppe oder Karte gewählten Fahrer.
  */
-export function DriverPanel({ state, sel, hist, refHist, open = true, onToggle }) {
+export function DriverPanel({ state, sel, hist, refHist, onDock }) {
   const [tab, setTab] = useState(() => { try { return localStorage.getItem('pitwall.dptab') === 'tyres' ? 'tyres' : 'live'; } catch { return 'live'; } });
   const pick = (v) => { setTab(v); try { localStorage.setItem('pitwall.dptab', v); } catch { /* optional */ } };
   const d = state.drivers.find((x) => x.num === sel) || state.drivers[0];
@@ -157,22 +157,18 @@ export function DriverPanel({ state, sel, hist, refHist, open = true, onToggle }
   const col = safeColor(d.color) || teamColor(d.team) || '#f5f5f3';
   const posTxt = d.pos != null && d.pos < 90 ? `P${d.pos}` : '–';
   return (
-    <section className={`dpanel${open ? '' : ' closed'}`} style={{ '--tc': col }} aria-label={t('tele.aria', { code: d.code })}>
+    <section className="dpanel" style={{ '--tc': col }} aria-label={t('tele.aria', { code: d.code })}>
       <div className="dp-head">
         <Face d={d} size={44} />
         <div className="dp-who"><span className="code">{d.code}</span><span className="muted">{d.name || d.code}{d.team ? ` · ${d.team}` : ''}</span></div>
         <span className="dp-pos">{posTxt}</span>
-        <Button type="text" size="small" className="dp-toggle" aria-expanded={open} aria-label={open ? t('dp.collapse') : t('dp.expand')} title={open ? t('dp.collapse') : t('dp.expand')} icon={open ? <DownOutlined /> : <UpOutlined />} onClick={onToggle} />
+        {onDock && <Button type="text" size="small" className="dp-toggle" aria-label={t('dp.dockBelow')} title={t('dp.dockBelow')} icon={<VerticalAlignBottomOutlined />} onClick={onDock} />}
       </div>
-      {open && (
-        <>
-          <Segmented block size="small" className="dp-seg" value={tab} onChange={pick} aria-label={t('dp.tabs')}
-            options={[{ value: 'live', label: t('dp.tab.live') }, { value: 'tyres', label: t('dp.tab.tyres') }]} />
-          <div className="dp-body">
-            {tab === 'tyres' ? <TyresTab d={d} state={state} color={col} /> : <LiveTab d={d} state={state} hist={hist} refHist={refHist} color={col} />}
-          </div>
-        </>
-      )}
+      <Segmented block size="small" className="dp-seg" value={tab} onChange={pick} aria-label={t('dp.tabs')}
+        options={[{ value: 'live', label: t('dp.tab.live') }, { value: 'tyres', label: t('dp.tab.tyres') }]} />
+      <div className="dp-body">
+        {tab === 'tyres' ? <TyresTab d={d} state={state} color={col} /> : <LiveTab d={d} state={state} hist={hist} refHist={refHist} color={col} />}
+      </div>
     </section>
   );
 }

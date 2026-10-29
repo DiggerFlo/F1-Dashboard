@@ -106,7 +106,7 @@ function Message({ m, st, open, onToggle, onRetry, driver, proxy, byCode }) {
  * Seitenleiste mit Funk und Race-Control. Nachrichten haben stabile Keys, damit Audio,
  * offene Dropdowns und Transkripte beim Live-Update erhalten bleiben.
  */
-export function Feed({ items, show = {}, onShow, drivers = [], filter, onFilter, collapsed = false, onToggle, sub, note, proxy = null, children = null }) {
+export function Feed({ items, show = {}, onShow, drivers = [], filter, onFilter, collapsed = false, onToggle, sub, note, proxy = null, children = null, sideTab = 'events', onSideTab, sel = null }) {
   const [tstate, setT] = useState({}); // id -> { status, text, pct, error }; fehlt ein Eintrag, wartet die Nachricht noch in der Schlange
   const [open, setOpen] = useState({}); // id -> Transkript ausgeklappt
   const busy = useRef(false);
@@ -143,18 +143,21 @@ export function Feed({ items, show = {}, onShow, drivers = [], filter, onFilter,
       <div className="sideh">
         <Button type="text" size="small" className="sidetoggle" aria-expanded={!collapsed} aria-label={collapsed ? t('feed.expand') : t('feed.collapse')} title={collapsed ? t('feed.expand') : t('feed.collapse')}
           icon={collapsed ? <MenuFoldOutlined /> : <MenuUnfoldOutlined />} onClick={onToggle} />
-        <h2>{t('feed.title')}</h2>
+        <h2>{children && sideTab === 'driver' ? t('side.driver') : t('feed.title')}</h2>
         {collapsed && <Badge count={items.filter((m) => visible(m, 'all', show)).length} overflowCount={99} size="small" color="#e8112d" />}
         <span className="label sidesub">{sub}</span>
         <Popover trigger="click" placement="bottomRight" content={settings}>
           <Button type="text" size="small" className="evgear" icon={<SettingOutlined />} aria-label={t('feed.settings')} title={t('feed.settings')} />
         </Popover>
       </div>
+      {children && !collapsed && <Segmented block size="small" className="seg sidetabs" value={sideTab} onChange={onSideTab} aria-label={t('side.tabs')}
+        options={[{ value: 'events', label: <>{t('feed.title')}<span className="fcount mono">{items.filter((m) => visible(m, 'all', show)).length}</span></> }, { value: 'driver', label: <>{t('side.driver')}{sel ? <span className="fcount mono">{sel}</span> : null}</> }]} />}
+      {children && sideTab === 'driver' ? children : (<>
       <Segmented block size="small" className="seg" options={filters(items, show)} value={filter} onChange={onFilter} aria-label={t('feed.filter')} />
       <div className="sidebody">
         {list.length ? list.map((m) => <Message key={m.id} m={m} st={tstate[m.id]} open={!!open[m.id]} onToggle={() => setOpen((x) => ({ ...x, [m.id]: !x[m.id] }))} onRetry={() => retry(m.id)} driver={byCode.get(m.code)} proxy={proxy} byCode={byCode} />) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t('feed.empty')} />}
       </div>
-      {children}
+      </>)}
       <div className="sidefoot">{note}</div>
     </aside>
   );
