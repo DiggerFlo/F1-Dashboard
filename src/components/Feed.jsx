@@ -106,7 +106,7 @@ function Message({ m, st, open, onToggle, onRetry, driver, proxy, byCode }) {
  * Seitenleiste mit Funk und Race-Control. Nachrichten haben stabile Keys, damit Audio,
  * offene Dropdowns und Transkripte beim Live-Update erhalten bleiben.
  */
-export function Feed({ items, show = {}, onShow, drivers = [], filter, onFilter, collapsed = false, onToggle, sub, note, proxy = null }) {
+export function Feed({ items, show = {}, onShow, drivers = [], filter, onFilter, collapsed = false, onToggle, sub, note, proxy = null, children = null }) {
   const [tstate, setT] = useState({}); // id -> { status, text, pct, error }; fehlt ein Eintrag, wartet die Nachricht noch in der Schlange
   const [open, setOpen] = useState({}); // id -> Transkript ausgeklappt
   const busy = useRef(false);
@@ -154,6 +154,7 @@ export function Feed({ items, show = {}, onShow, drivers = [], filter, onFilter,
       <div className="sidebody">
         {list.length ? list.map((m) => <Message key={m.id} m={m} st={tstate[m.id]} open={!!open[m.id]} onToggle={() => setOpen((x) => ({ ...x, [m.id]: !x[m.id] }))} onRetry={() => retry(m.id)} driver={byCode.get(m.code)} proxy={proxy} byCode={byCode} />) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t('feed.empty')} />}
       </div>
+      {children}
       <div className="sidefoot">{note}</div>
     </aside>
   );

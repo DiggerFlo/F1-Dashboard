@@ -56,6 +56,7 @@ export function useDashboard() {
   };
   useEffect(() => () => clearTimeout(pendTimer.current), []);
   const [mapMode, setMapMode] = useState(() => { try { const m = params.get('map') || localStorage.getItem('pitwall.map'); return m === 'wide' ? 'wide' : 'normal'; } catch { return 'normal'; } });
+  const [driverPanel, setDriverPanel] = useState(() => { try { return localStorage.getItem('pitwall.driver') !== 'closed'; } catch { return true; } });
   const [feedOpen, setFeedOpen] = useState(() => { try { return localStorage.getItem('pitwall.feed') !== 'closed'; } catch { return true; } });
 
   useEffect(() => {
@@ -162,6 +163,7 @@ export function useDashboard() {
     openRace(race) { startPending({ type: null, label: race?.meeting || 'tab.race' }); setView(null); source.openRace(race, db); },
     pick: setSel,
     loadSeasons: () => loadSeasons(yearsFor()),
+    toggleDriverPanel() { setDriverPanel((o) => { try { localStorage.setItem('pitwall.driver', o ? 'closed' : 'open'); } catch { /* optional */ } return !o; }); },
     toggleFeed() { setFeedOpen((o) => { try { localStorage.setItem('pitwall.feed', o ? 'closed' : 'open'); } catch { /* optional */ } return !o; }); },
     basemap(id) { setBasemap(id); try { localStorage.setItem('pitwall.basemap', id); } catch { /* optional */ } },
     mapMode(m) { setMapMode(m); try { localStorage.setItem('pitwall.map', m); } catch { /* optional */ } },
@@ -177,6 +179,6 @@ export function useDashboard() {
   };
 
   const loading = pending ? { label: pending.label } : view === 'calendar' && !cal ? { label: TAB_LABEL.calendar } : null;
-  const ui = { geo, basemap, events, show, loading, pendingType: pending?.type || null, seasons, feedOpen, mapMode, cinema: mapMode === 'wide' && view !== 'calendar' && !!state?.track?.points?.length, sel: selected, filter, demo: source.demo, sim: !!source.sim, view, year, cal, db, pos: animator.sample(performance.now()) };
+  const ui = { geo, basemap, events, show, loading, pendingType: pending?.type || null, seasons, feedOpen, driverPanel, sideDriver: driverPanel && feedOpen && view !== 'calendar' && !!state && state.session.type !== 'upcoming' && state.drivers.length > 0, mapMode, cinema: mapMode === 'wide' && view !== 'calendar' && !!state?.track?.points?.length, sel: selected, filter, demo: source.demo, sim: !!source.sim, view, year, cal, db, pos: animator.sample(performance.now()) };
   return { state, ui, actions, hist, animator, params };
 }

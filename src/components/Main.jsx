@@ -120,14 +120,22 @@ function PitTable({ state, onPick }) {
 
 const LEDS = 15;
 /** Schaltlichter wie am Lenkrad: 5 grün, 5 rot, 5 blau, je nach Drehzahl (Maximum 13 000). */
-function ShiftLights({ rpm }) {
+export function ShiftLights({ rpm }) {
   const lit = rpm == null ? 0 : Math.round(Math.min(1, Math.max(0, rpm / 13000)) * LEDS);
   return <span className="leds" aria-hidden="true">{Array.from({ length: LEDS }, (_, i) => <i key={i} className={`${i < 5 ? 'lg' : i < 10 ? 'lr' : 'lb'}${i < lit ? ' on' : ''}`} />)}</span>;
 }
 
-const Pedal = ({ label, v, cls }) => (
+export const Pedal = ({ label, v, cls }) => (
   <div className="ped"><span className="label">{label}</span><span className="pbar2"><i className={cls} style={{ width: `${Math.round(Math.min(100, Math.max(0, v || 0)))}%` }} /></span><span className="mono">{Math.round(v || 0)}%</span></div>
 );
+
+/** Overtake-Modus (ab 2026) bzw. DRS des Fahrers: Beschriftung, Wert, Hinweis, ob aktiv. */
+export function modeOf(state, d) {
+  const f = state.flag;
+  return state.overtake
+    ? { label: t('tele.ovt'), value: d.ovt ? t('tele.ovt.reach') : state.overtake.open ? t('tele.ovt.open') : t('tele.ovt.locked'), note: d.ovt ? t('tele.ovt.noteReach') : state.overtake.open === false || f === 'sc' || f === 'red' ? t('tele.ovt.noteRc') : t('tele.ovt.noteFar'), on: d.ovt }
+    : { label: t('tele.drs'), value: d.drs ? t('tele.drs.open') : t('tele.drs.closed'), note: f === 'sc' || f === 'red' ? t('tele.drs.locked') : '', on: d.drs };
+}
 
 function Detail({ state, sel, hist, refHist }) {
   const narrow = useNarrow();
@@ -139,9 +147,7 @@ function Detail({ state, sel, hist, refHist }) {
   const col = safeColor(d.color) || teamColor(d.team) || '#f5f5f3';
   const posTxt = d.pos != null && d.pos < 90 ? `P${d.pos}` : '–';
   const hasSpeed = d.speed != null;
-  const mode = state.overtake
-    ? { label: t('tele.ovt'), value: d.ovt ? t('tele.ovt.reach') : state.overtake.open ? t('tele.ovt.open') : t('tele.ovt.locked'), note: d.ovt ? t('tele.ovt.noteReach') : state.overtake.open === false || f === 'sc' || f === 'red' ? t('tele.ovt.noteRc') : t('tele.ovt.noteFar'), on: d.ovt }
-    : { label: t('tele.drs'), value: d.drs ? t('tele.drs.open') : t('tele.drs.closed'), note: f === 'sc' || f === 'red' ? t('tele.drs.locked') : '', on: d.drs };
+  const mode = modeOf(state, d);
   return (
     <Section title={t('tele.title', { code: d.code })} meta={d.team ? <><span className="tc" style={{ background: col }} />{d.team}</> : t('tele.latest')} label={t('tele.aria', { code: d.code })}>
       <div className="tele" style={{ '--tc': col }}>
@@ -321,7 +327,7 @@ export function Main({ state, ui, hist, refHist, actions = {} }) {
       </div>
       <Section title={ttl} meta={t('main.pickRow')}><TimingTable state={state} sel={ui.sel} onPick={actions.pick} /></Section>
       {type === 'race' && <PitTable state={state} onPick={actions.pick} />}
-      <Detail state={state} sel={ui.sel} hist={hist} refHist={refHist} />
+      {!ui.sideDriver && <Detail state={state} sel={ui.sel} hist={hist} refHist={refHist} />}
     </>
   );
 }
