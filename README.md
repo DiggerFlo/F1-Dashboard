@@ -135,7 +135,7 @@ OpenF1 begrenzt die Anfragen (HTTP 429) und antwortet bei Abfragen ohne Treffer 
 
 ## Logo
 
-`public/logo.svg` ist das Pitwall-Zeichen (ein „P“ mit rotem Quadrat, helle Fläche für dunklen Grund), `public/favicon.svg` dieselbe Marke auf dunklem Quadrat als Browser-Symbol. Die Kopfzeile (`src/components/Chrome.jsx`) und `index.html` binden die Dateien ein; eine Änderung am Logo geschieht also nur dort.
+`public/logo.svg` ist das Pitwall-Zeichen (ein „P“ mit rotem Quadrat, helle Fläche für dunklen Grund), `public/favicon.svg` dieselbe Marke auf dunklem Quadrat als Browser-Symbol. Die Kopfzeile (`src/components/Chrome.jsx`) und `index.html` binden die Dateien ein; eine Änderung am Logo geschieht also nur dort. `public/social-preview.png` (1280 × 640) ist das Vorschaubild für das Repository: auf GitHub unter **Settings > General > Social preview** hochladen.
 
 ## Aufbau
 
