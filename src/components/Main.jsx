@@ -1,4 +1,5 @@
-import { Card, Table } from 'antd';
+import { Button, Card, Table } from 'antd';
+import { VerticalAlignTopOutlined } from '@ant-design/icons';
 import { fmtLap, fmtGap, fmtClock, safeColor } from '../../js/format.js';
 import { tracesSvg } from '../../js/track.js';
 import { teamColor } from '../../js/teams.js';
@@ -137,7 +138,7 @@ export function modeOf(state, d) {
     : { label: t('tele.drs'), value: d.drs ? t('tele.drs.open') : t('tele.drs.closed'), note: f === 'sc' || f === 'red' ? t('tele.drs.locked') : '', on: d.drs };
 }
 
-function Detail({ state, sel, hist, refHist }) {
+function Detail({ state, sel, hist, refHist, onDock }) {
   const narrow = useNarrow();
   const d = state.drivers.find((x) => x.num === sel) || state.drivers[0];
   if (!d) return null;
@@ -149,7 +150,7 @@ function Detail({ state, sel, hist, refHist }) {
   const hasSpeed = d.speed != null;
   const mode = modeOf(state, d);
   return (
-    <Section title={t('tele.title', { code: d.code })} meta={d.team ? <><span className="tc" style={{ background: col }} />{d.team}</> : t('tele.latest')} label={t('tele.aria', { code: d.code })}>
+    <Section title={t('tele.title', { code: d.code })} meta={<>{d.team ? <><span className="tc" style={{ background: col }} />{d.team}</> : t('tele.latest')}{onDock && <Button type="text" size="small" className="dockbtn" icon={<VerticalAlignTopOutlined />} onClick={onDock}>{t('dp.dockSide')}</Button>}</>} label={t('tele.aria', { code: d.code })}>
       <div className="tele" style={{ '--tc': col }}>
         <Card className="tdriver">
           <div className="tface"><Face d={d} size={96} /><span className="tpos disp">{posTxt}</span></div>
@@ -327,7 +328,7 @@ export function Main({ state, ui, hist, refHist, actions = {} }) {
       </div>
       <Section title={ttl} meta={t('main.pickRow')}><TimingTable state={state} sel={ui.sel} onPick={actions.pick} /></Section>
       {type === 'race' && <PitTable state={state} onPick={actions.pick} />}
-      {!ui.sideDriver && <Detail state={state} sel={ui.sel} hist={hist} refHist={refHist} />}
+      {!ui.sideDriver && <Detail state={state} sel={ui.sel} hist={hist} refHist={refHist} onDock={ui.dock === 'below' ? () => actions.dock?.('side') : undefined} />}
     </>
   );
 }

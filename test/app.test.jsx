@@ -1516,22 +1516,37 @@ test('demo: a pit stop closes the stint and starts a new one with fresh tyres', 
   assert.ok(fresh.length <= closed.length + 40 && fresh.age === fresh.length);
 });
 
-test('driver panel renders live values and the tyre tab; the panel can be closed', () => {
+test('driver panel renders live values and the tyre tab, with a button to dock it below the table', () => {
   const e = createDemoEngine({ scenario: 'race', seed: 5 });
   run(e, 20);
   const state = e.state();
   const sel = state.drivers[2].num;
   const hist = new Map([[sel, [{ speed: 100, throttle: 50, brake: 0 }, { speed: 200, throttle: 100, brake: 0 }]]]);
-  const open = html(<DriverPanel state={state} sel={sel} hist={hist} refHist={null} open onToggle={() => {}} />);
-  assert.ok(open.includes('dpanel') && open.includes(state.drivers[2].code) && open.includes('dp-live') && open.includes('<svg'));
+  const open = html(<DriverPanel state={state} sel={sel} hist={hist} refHist={null} onDock={() => {}} />);
+  assert.ok(open.includes('dpanel') && open.includes(state.drivers[2].code) && open.includes('dp-live') && open.includes('<svg') && open.includes('dp-toggle'));
+  assert.ok(!html(<DriverPanel state={state} sel={sel} hist={hist} refHist={null} />).includes('dp-toggle'), 'ohne Dock-Funktion kein Knopf');
   const tyres = html(<TyresTab d={state.drivers[2]} state={state} color="#e8002d" />);
   assert.ok(tyres.includes('dp-tyres') && tyres.includes('dp-bars') && tyres.includes('dp-tl') && tyres.includes('dp-tbl'));
   assert.ok(html(<LiveTab d={state.drivers[2]} state={state} hist={hist} refHist={null} color="#e8002d" />).includes('dp-pedals'));
-  const closed = html(<DriverPanel state={state} sel={sel} hist={hist} refHist={null} open={false} onToggle={() => {}} />);
-  assert.ok(closed.includes('closed') && !closed.includes('dp-body'));
-  assert.equal(html(<DriverPanel state={{ ...state, drivers: [] }} sel={1} hist={hist} open onToggle={() => {}} />), '');
+  assert.equal(html(<DriverPanel state={{ ...state, drivers: [] }} sel={1} hist={hist} />), '');
   const none = html(<TyresTab d={{ ...state.drivers[0], tyres: { stints: [], cur: null } }} state={state} color="#fff" />);
   assert.ok(none.includes('dp-empty'));
+});
+
+test('sidebar: events and driver are separate tabs, only one is shown at a time', () => {
+  const e = createDemoEngine({ scenario: 'race', seed: 5 });
+  run(e, 20);
+  const state = e.state();
+  const items = [{ id: 'a', kind: 'rc', t: 1, text: 'GREEN LIGHT', category: 'Flag', flag: 'GREEN' }];
+  const panel = <div className="dpanel">Fahrer-Panel</div>;
+  const feed = (sideTab, kids = panel) => html(<Feed items={items} drivers={state.drivers} filter="all" sideTab={sideTab} sel="LEC" onSideTab={() => {}}>{kids}</Feed>);
+  const events = feed('events');
+  assert.ok(events.includes('sidetabs') && events.includes('class="sidebody"') && !events.includes('Fahrer-Panel'), 'Reiter Ereignisse: Liste, kein Fahrer-Panel');
+  const driver = feed('driver');
+  assert.ok(driver.includes('sidetabs') && driver.includes('Fahrer-Panel') && !driver.includes('class="sidebody"'), 'Reiter Fahrer: Panel, keine Ereignisliste');
+  assert.ok(driver.includes('LEC'), 'Reiter zeigt den gewählten Fahrer');
+  const plain = feed('events', null);
+  assert.ok(!plain.includes('sidetabs') && plain.includes('class="sidebody"'), 'ohne Fahrer-Panel (unter der Tabelle) keine Reiter');
 });
 
 test('main: the driver detail moves to the sidebar and returns when the panel is closed', () => {
@@ -1540,6 +1555,8 @@ test('main: the driver detail moves to the sidebar and returns when the panel is
   const st = e.state();
   assert.ok(!main(st, { sel: 3, demo: true, sideDriver: true }).includes('class="tele'));
   assert.ok(main(st, { sel: 3, demo: true, sideDriver: false }).includes('class="tele'));
+  assert.ok(!main(st, { sel: 3, demo: true, sideDriver: false, dock: 'side' }).includes('dockbtn'), 'Knopf nur, wenn die Ansicht unter der Tabelle gewählt wurde');
+  assert.ok(main(st, { sel: 3, demo: true, sideDriver: false, dock: 'below' }, ).includes('dockbtn'));
 });
 
 test('openf1 replay: laps and stints become tyre analysis (stint length, age, degradation)', async () => {

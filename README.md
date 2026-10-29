@@ -80,7 +80,7 @@ Die Demo enthält dafür Tagesform und Windschatten (Überholungen im Rennen), e
 
 ## Fahrer-Panel und Reifen
 
-Wer einen Fahrer wählt (Tabelle, Spitzengruppe, Karte), sieht seine Werte jetzt in der Seitenleiste **unter den Ereignissen** (vorher unten auf der Seite). Das Panel hat zwei Reiter und lässt sich einklappen; ist es zu, erscheint die bisherige Telemetrie wieder unter der Tabelle. Die Wahl wird gemerkt (`pitwall.driver`, `pitwall.dptab`).
+Wer einen Fahrer wählt (Tabelle, Spitzengruppe, Karte), sieht seine Werte in der Seitenleiste auf einem eigenen **Reiter „Fahrer“ neben „Ereignisse“**; es ist immer nur einer der beiden sichtbar. Ein Klick auf einen Fahrer springt auf den Reiter Fahrer, ein Klick auf „Ereignisse“ zeigt wieder die Liste. Wer die Fahrer-Ansicht lieber unter der Tabelle hat, verschiebt sie mit dem Pfeil im Kopf des Panels dorthin (und mit „In die Seitenleiste verschieben“ zurück); dann hat die Seitenleiste keine Reiter. Die Wahl wird gemerkt (`pitwall.dock`, `pitwall.sidetab`, `pitwall.dptab`). Ist die Seitenleiste eingeklappt, erscheint die Fahrer-Ansicht ebenfalls unter der Tabelle.
 
 - **Live:** Geschwindigkeit, Gang, Drehzahl-LEDs, Gas und Bremse, DRS bzw. Overtake-Modus, Verlauf der letzten Messwerte, letzte und beste Runde, Abstand.
 - **Reifen:** Mischung, **Stint-Länge**, **Reifenalter** (auch bei gebrauchten Sätzen), **Reifenabbau pro Runde** mit Einstufung (gering, mittel, hoch), Rundenzeiten des Stints als Balken mit Trendlinie, Reifenstrategie als Streifen und eine Tabelle aller Stints.
