@@ -70,6 +70,15 @@ Wenn im Rennen ein Auto ein anderes überholt, fährt oben rechts ein kleiner Hi
 
 Die Demo enthält dafür Tagesform und Windschatten (Überholungen im Rennen), ein Training als eigene Session, Boxenstopp-, Schnellste-Runde-, Strafen- und Wetter-Meldungen sowie einen Regen-Knopf.
 
+## Fahrer-Panel und Reifen
+
+Wer einen Fahrer wählt (Tabelle, Spitzengruppe, Karte), sieht seine Werte jetzt in der Seitenleiste **unter den Ereignissen** (vorher unten auf der Seite). Das Panel hat zwei Reiter und lässt sich einklappen; ist es zu, erscheint die bisherige Telemetrie wieder unter der Tabelle. Die Wahl wird gemerkt (`pitwall.driver`, `pitwall.dptab`).
+
+- **Live:** Geschwindigkeit, Gang, Drehzahl-LEDs, Gas und Bremse, DRS bzw. Overtake-Modus, Verlauf der letzten Messwerte, letzte und beste Runde, Abstand.
+- **Reifen:** Mischung, **Stint-Länge**, **Reifenalter** (auch bei gebrauchten Sätzen), **Reifenabbau pro Runde** mit Einstufung (gering, mittel, hoch), Rundenzeiten des Stints als Balken mit Trendlinie, Reifenstrategie als Streifen und eine Tabelle aller Stints.
+
+Der Abbau ist der Trend der Rundenzeiten im Stint (Ausgleichsgerade), der Spritverbrauch (0,05 s pro Runde) ist herausgerechnet. Nicht gezählt werden Startrunde, Out- und Inlaps, Runden unter Safety Car/VSC/roter Flagge (aus den Race-Control-Meldungen) und Ausreißer (über 7 % langsamer als der Median); unter vier sauberen Runden gibt es keinen Wert. Das ist eine Näherung: Verkehr, Wetter und Motormodi verfälschen sie, und die 0,05 s sind ein pauschaler Wert (`js/tyres.js`). Die Daten kommen aus OpenF1 (`laps`, `stints`) bzw. der Demo, die ein Reifenmodell mit Abbau je Mischung und Sprit nutzt.
+
 ## Qualität
 
 - **Schriften selbst gehostet** (`fonts/`, OFL, keine Anfragen an Google), `font-display: swap`, Vorab-Laden der wichtigsten Schnitte.

@@ -8,6 +8,8 @@ import { createDemoEngine, createDemoSource } from '../js/sources/demo.js';
 import { flagFromControl, overtakeFromControl, latestBy, mergeUpcoming, createOpenF1Client, createOpenF1Source } from '../js/sources/openf1.js';
 import { createReplayBuffer, lastAtOrBefore, toColumns, columnsToJSON, columnsFromJSON, CAR_FIELDS, IV_FIELDS } from '../js/sources/replay-buffer.js';
 import { createBulkCache } from '../js/cache.js';
+import { analyzeTyres, neutralWindows, slope, FUEL_GAIN } from '../js/tyres.js';
+import { DriverPanel, TyresTab, LiveTab } from '../src/components/DriverPanel.jsx';
 import { mapDriverStandings, mapConstructorStandings, mapRaces, mapLastResult, buildJolpicaCalendar, createJolpica } from '../js/sources/jolpica.js';
 import { fmtLap, fmtGap, fmtClock, sectorClass, esc, splitCountdown } from '../js/format.js';
 import { readFileSync } from 'node:fs';
@@ -1411,4 +1413,142 @@ test('bulk cache: stores and reads through a Cache Storage, drops the oldest, ne
   assert.equal(await c.read('car_data?session_key=1'), undefined, 'ältester Eintrag entfernt');
   assert.equal(await createBulkCache(null).read('x'), undefined);
   assert.equal(await createBulkCache(null).write('x', 1), false);
+});
+
+// ---------- Reifen: Stint-Länge und Abbau pro Runde ----------
+
+/** Rundenzeiten mit bekanntem Abbau: Basis + deg·(Runde im Stint) − Sprit·(Runde − 1). */
+const mkLaps = (from, to, deg, base = 90, start0 = 1e12) => Array.from({ length: to - from + 1 }, (_, i) => { const lap = from + i; return { lap, time: base + deg * i - FUEL_GAIN * (lap - 1), start: start0 + lap * 95000 }; });
+
+test('tyres: slope and neutral windows', () => {
+  assert.equal(slope([[1, 1], [2, 2], [3, 3]]), 1);
+  assert.equal(slope([[1, 5]]), null);
+  const w = neutralWindows([
+    { date: '2025-01-01T10:00:00Z', category: 'SafetyCar', message: 'SAFETY CAR DEPLOYED' },
+    { date: '2025-01-01T10:05:00Z', category: 'Flag', flag: 'GREEN', scope: 'Track', message: 'GREEN' },
+    { date: '2025-01-01T10:20:00Z', category: 'Flag', flag: 'RED', scope: 'Track', message: 'RED FLAG' },
+  ], Date.parse('2025-01-01T10:30:00Z'));
+  assert.deepEqual(w, [[Date.parse('2025-01-01T10:00:00Z'), Date.parse('2025-01-01T10:05:00Z')], [Date.parse('2025-01-01T10:20:00Z'), Date.parse('2025-01-01T10:30:00Z')]]);
+});
+
+test('tyres: degradation per lap is the lap time trend minus the fuel effect', () => {
+  const laps = mkLaps(1, 20, 0.08);
+  const { cur } = analyzeTyres(laps, [{ n: 1, compound: 'M', from: 1, to: null, ageAtStart: 0 }], { race: true });
+  assert.ok(Math.abs(cur.deg - 0.08) < 1e-9, `Abbau ${cur.deg}`);
+  assert.equal(cur.length, 20);
+  assert.equal(cur.age, 20);
+  assert.equal(cur.times[0].why, 'start', 'Startrunde zählt nicht');
+  assert.equal(cur.times.filter((r) => r.ok).length, 19);
+  assert.equal(analyzeTyres(laps, [{ n: 1, compound: 'M', from: 1, to: null }], { race: false }).cur.deg.toFixed(3), (0.08 - FUEL_GAIN).toFixed(3), 'ohne Rennen kein Spritabzug');
+});
+
+test('tyres: pit laps, safety car laps and outliers are left out; two stints, used tyres', () => {
+  const l1 = mkLaps(1, 20, 0.05), l2 = mkLaps(21, 40, 0.1);
+  l1[19].time += 4; // Inlap
+  l2[0].time += 17; // Outlap
+  l2[5].time += 9; // Ausreißer (Verkehr)
+  l2[8].start = Date.parse('2025-01-01T10:01:00Z'); // unter Safety Car
+  const windows = [[Date.parse('2025-01-01T10:00:00Z'), Date.parse('2025-01-01T10:05:00Z')]];
+  const r = analyzeTyres([...l1, ...l2], [{ n: 1, compound: 'M', from: 1, to: 20, ageAtStart: 0 }, { n: 2, compound: 'H', from: 21, to: null, ageAtStart: 4 }], { windows, race: true });
+  const [a, b] = r.stints;
+  assert.equal(a.times.at(-1).why, 'in');
+  assert.equal(b.times[0].why, 'out');
+  assert.equal(b.times[5].why, 'slow');
+  assert.equal(b.times[8].why, 'neutral');
+  assert.ok(Math.abs(a.deg - 0.05) < 1e-9 && Math.abs(b.deg - 0.1) < 1e-9, `${a.deg} / ${b.deg}`);
+  assert.equal(b.age, 24, '20 Runden auf einem schon 4 Runden gefahrenen Satz');
+  assert.equal(r.cur, b);
+  assert.equal(b.current, true);
+  assert.equal(a.current, false);
+});
+
+test('tyres: too few clean laps give no degradation, empty input is safe', () => {
+  const r = analyzeTyres(mkLaps(1, 3, 0.1), [{ n: 1, compound: 'S', from: 1, to: null }]);
+  assert.equal(r.cur.deg, null);
+  assert.equal(r.cur.length, 3);
+  assert.deepEqual(analyzeTyres([], []), { stints: [], cur: null });
+  assert.equal(analyzeTyres([], [{ n: 1, compound: 'H', from: 5, to: null }]).cur.length, 0);
+});
+
+test('demo: every driver brings stints, lap times and a plausible tyre degradation', () => {
+  const e = createDemoEngine({ scenario: 'race', seed: 5 });
+  const s = e.state();
+  for (const d of s.drivers) {
+    assert.ok(d.tyres.cur && d.tyres.cur.length > 3, `${d.code} hat einen Stint`);
+    assert.equal(d.tyres.stints.length, 2, 'ein Stopp in der Vorgeschichte');
+    assert.ok(d.tyres.cur.deg > 0 && d.tyres.cur.deg < 0.3, `${d.code}: ${d.tyres.cur.deg}`);
+    assert.equal(d.tyres.cur.age, d.tyreAge);
+  }
+  const soft = s.drivers.find((d) => d.tyre === 'S'), hard = s.drivers.find((d) => d.tyre === 'H');
+  assert.ok(soft.tyres.cur.deg > hard.tyres.cur.deg, 'Soft baut schneller ab als Hard');
+  assert.equal('lapLog' in s.drivers[0], false);
+  run(e, 40); // ein paar Runden fahren: Rundenzeiten kommen dazu
+  const before = s.drivers[0].tyres.cur.length;
+  assert.ok(e.state().drivers.every((d) => d.tyres.cur.length >= 1) && e.state().drivers.some((d) => d.tyres.cur.length > before - 1));
+});
+
+test('demo: a pit stop closes the stint and starts a new one with fresh tyres', () => {
+  const e = createDemoEngine({ scenario: 'race', seed: 5 });
+  let stops = null;
+  for (let i = 0; i < 4000 && !stops; i++) { e.step(0.5); stops = e.state().drivers.find((d) => d.tyres.stints.length > 2); }
+  assert.ok(stops, 'irgendwer macht einen Stopp');
+  const [, closed, fresh] = stops.tyres.stints;
+  assert.equal(closed.current, false);
+  assert.equal(fresh.from, closed.to + 1);
+  assert.ok(fresh.length <= closed.length + 40 && fresh.age === fresh.length);
+});
+
+test('driver panel renders live values and the tyre tab; the panel can be closed', () => {
+  const e = createDemoEngine({ scenario: 'race', seed: 5 });
+  run(e, 20);
+  const state = e.state();
+  const sel = state.drivers[2].num;
+  const hist = new Map([[sel, [{ speed: 100, throttle: 50, brake: 0 }, { speed: 200, throttle: 100, brake: 0 }]]]);
+  const open = html(<DriverPanel state={state} sel={sel} hist={hist} refHist={null} open onToggle={() => {}} />);
+  assert.ok(open.includes('dpanel') && open.includes(state.drivers[2].code) && open.includes('dp-live') && open.includes('<svg'));
+  const tyres = html(<TyresTab d={state.drivers[2]} state={state} color="#e8002d" />);
+  assert.ok(tyres.includes('dp-tyres') && tyres.includes('dp-bars') && tyres.includes('dp-tl') && tyres.includes('dp-tbl'));
+  assert.ok(html(<LiveTab d={state.drivers[2]} state={state} hist={hist} refHist={null} color="#e8002d" />).includes('dp-pedals'));
+  const closed = html(<DriverPanel state={state} sel={sel} hist={hist} refHist={null} open={false} onToggle={() => {}} />);
+  assert.ok(closed.includes('closed') && !closed.includes('dp-body'));
+  assert.equal(html(<DriverPanel state={{ ...state, drivers: [] }} sel={1} hist={hist} open onToggle={() => {}} />), '');
+  const none = html(<TyresTab d={{ ...state.drivers[0], tyres: { stints: [], cur: null } }} state={state} color="#fff" />);
+  assert.ok(none.includes('dp-empty'));
+});
+
+test('main: the driver detail moves to the sidebar and returns when the panel is closed', () => {
+  const e = createDemoEngine({ scenario: 'race', seed: 5 });
+  run(e, 10);
+  const st = e.state();
+  assert.ok(!main(st, { sel: 3, demo: true, sideDriver: true }).includes('class="tele'));
+  assert.ok(main(st, { sel: 3, demo: true, sideDriver: false }).includes('class="tele'));
+});
+
+test('openf1 replay: laps and stints become tyre analysis (stint length, age, degradation)', async () => {
+  const base = fakeRace();
+  const t0 = Date.parse(base.session.date_start);
+  const laps = [], stintsRows = [];
+  for (const n of [1, 16]) {
+    for (let lap = 1; lap <= 40; lap++) {
+      const inStint2 = lap >= 11, k = inStint2 ? lap - 11 : lap - 1;
+      laps.push({ driver_number: n, lap_number: lap, date_start: new Date(t0 + 60000 + (lap - 1) * 100000).toISOString(), lap_duration: 90 + 0.07 * k - 0.05 * (lap - 1) + (lap === 11 ? 17 : 0), is_pit_out_lap: lap === 11, duration_sector_1: 30, duration_sector_2: 30, duration_sector_3: 30 });
+    }
+    stintsRows.push({ driver_number: n, stint_number: 1, lap_start: 1, lap_end: 10, compound: 'MEDIUM', tyre_age_at_start: 0 }, { driver_number: n, stint_number: 2, lap_start: 11, lap_end: null, compound: 'HARD', tyre_age_at_start: 3 });
+  }
+  const client = async (path) => (path.startsWith('laps?session_key=1') && !path.includes('driver_number') ? laps : path.startsWith('stints') ? stintsRows : base.client(path));
+  const src = createOpenF1Source({ client, jolpica: base.jolpica, replayOnly: true, speed: 1, bulk: false });
+  const states = [];
+  src.start((s) => states.push(s));
+  await waitFor(() => states.some((s) => s.drivers.length));
+  src.pause(true); src.seek(0.3); // 36 Minuten: rund 21 Runden sind gefahren
+  await waitFor(() => { const d = states.at(-1).drivers.find((x) => x.code === 'NOR'); return d?.tyres?.cur?.n === 2 && !states.at(-1).replay.loading; }, 5000);
+  const d = states.at(-1).drivers.find((x) => x.code === 'NOR');
+  assert.equal(d.tyres.stints.length, 2);
+  assert.equal(d.tyres.cur.compound, 'H');
+  assert.equal(d.tyres.cur.ageAtStart, 3);
+  assert.ok(d.tyres.cur.length >= 8 && d.tyres.cur.age === d.tyres.cur.length + 3, `Stint ${d.tyres.cur.length}, Alter ${d.tyres.cur.age}`);
+  assert.ok(Math.abs(d.tyres.cur.deg - 0.07) < 1e-6, `Abbau ${d.tyres.cur.deg}`);
+  assert.equal(d.tyres.stints[0].to, 10);
+  assert.equal(d.tyres.cur.times[0].why, 'out');
+  src.stop();
 });

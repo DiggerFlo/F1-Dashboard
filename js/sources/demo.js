@@ -9,6 +9,7 @@ import { DEMO_TRACK } from './demo-track.js';
 import { buildDemoCalendar } from '../calendar.js';
 import { fmtLap } from '../format.js';
 import { t as tr } from '../i18n.js';
+import { analyzeTyres, FUEL_GAIN } from '../tyres.js';
 
 const MONZA = { name: DEMO_TRACK.name, points: DEMO_TRACK.points, rotate: DEMO_TRACK.rotate, layoutId: 'demo-monza' };
 const SECTORS = [0, 0.34, 0.68]; // Sektorgrenzen der Simulation (Anteil der Runde)
@@ -19,6 +20,8 @@ const TEAMS = [['McLaren', '#ff8000'], ['Ferrari', '#e8002d'], ['Red Bull Racing
   ['Racing Bulls', '#6692ff'], ['Aston Martin', '#229971'], ['Haas', '#b6babd'], ['Kick Sauber', '#52e252'], ['Alpine', '#ff87bc']];
 const COMPOUNDS = ['M', 'H', 'M', 'S', 'H', 'M', 'H', 'M', 'S', 'H', 'M', 'H', 'M', 'H', 'S', 'M', 'H', 'M', 'H', 'M'];
 const BASE_LAP = 92.4;
+const DEG = { S: 0.1, M: 0.06, H: 0.035, I: 0.05, W: 0.04 }; // Reifenabbau in s pro Runde der Reifenalter (Demo-Modell)
+const wearOf = (c, age) => (DEG[c] ?? 0.06) * age * (1 + age / 60);
 const TOTAL_LAPS = 57;
 const GAP_SC = 0.012; // Zielabstand hinter dem Vordermann in Runden
 
@@ -50,7 +53,7 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
   let clips = new Map(); // code -> echte Funksprüche aus public/data/radio.json
   const clipPos = new Map();
   let gridLeft = null; // Startampel: Sekunden bis zum Start (negativ = Lichter aus, noch kurz sichtbar)
-  let seq = 0, bestLapAll = null, sprint = false, kind, simT, realT, flag, flagSince, feed, drivers, overall, remaining, upcomingEnd, autoIdx, weather, lastNow;
+  let neutral = [], neutralFrom = null, seq = 0, bestLapAll = null, sprint = false, kind, simT, realT, flag, flagSince, feed, drivers, overall, remaining, upcomingEnd, autoIdx, weather, lastNow;
 
   const AUTO = [
     [0, () => setKind('race')], [40, () => trigger('sc')], [75, () => trigger('green')], [95, () => trigger('red')],
@@ -61,19 +64,45 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
 
   function newDriver(i) {
     return { num: i + 1, code: DRIVERS[i][0], name: DRIVERS[i][1], team: TEAMS[i >> 1][0], color: TEAMS[i >> 1][1], skill: i * 0.09, prog: 0, v: 0, secStart: 0, secT: [], bestSec: [null, null, null], sectors: [null, null, null], sectorCls: ['', '', ''],
-      best: null, last: null, stops: 0, tyre: COMPOUNDS[i], tyreAge: 8 + (i % 7), pit: 0, onTrack: true, speed: 0, throttle: 0, brake: 0, gear: 1, rpm: 0, drs: false, gap: 0, interval: 0, pos: i + 1, x: null, y: null, wait: 0 };
+      best: null, last: null, stops: 0, tyre: COMPOUNDS[i], tyreAge: 8 + (i % 7), pit: 0, onTrack: true, speed: 0, throttle: 0, brake: 0, gear: 1, rpm: 0, drs: false, gap: 0, interval: 0, pos: i + 1, x: null, y: null, wait: 0, lapLog: [], stintLog: [{ n: 1, compound: COMPOUNDS[i], from: 1, to: null, ageAtStart: 0 }] };
+  }
+
+  /** Reifenwechsel: laufenden Stint abschließen (die aktuelle Runde ist die Boxeneinfahrt) und neuen beginnen. */
+  function newStint(d) {
+    const cur = d.stintLog.at(-1);
+    cur.to = Math.floor(d.prog);
+    d.stintLog.push({ n: cur.n + 1, compound: d.tyre, from: cur.to + 1, ageAtStart: 0 });
+  }
+
+  /** Vorgeschichte des Rennens: Rundenzeiten und Stints bis zur aktuellen Runde, damit der Reifenabbau sofort sichtbar ist. */
+  function seedHistory(d, i, startLap) {
+    d.lapLog = [];
+    if (sprint) { d.tyreAge = startLap - 1; d.stintLog = [{ n: 1, compound: d.tyre, from: 1, to: null, ageAtStart: 0 }]; } // Sprint: keine Stopps
+    else {
+      const from = startLap - d.tyreAge; // aktueller Reifensatz seit dieser Runde, davor ein Satz einer anderen Mischung
+      d.stops = 1;
+      d.stintLog = [{ n: 1, compound: d.tyre === 'M' ? 'H' : 'M', from: 1, to: from - 1, ageAtStart: 0 }, { n: 2, compound: d.tyre, from, to: null, ageAtStart: 0 }];
+    }
+    for (let lap = 1; lap < startLap; lap++) {
+      const st = d.stintLog.find((x) => lap >= x.from && (x.to == null || lap <= x.to));
+      let time = BASE_LAP + d.skill + wearOf(st.compound, lap - st.from) - FUEL_GAIN * (lap - 1) + (rnd() - 0.5) * 0.5;
+      if (lap === 1) time += 6;
+      else if (lap === st.from && st.n > 1) time += 18; // Outlap
+      else if (st.to === lap) time += 3; // Inlap
+      d.lapLog.push({ lap, time, start: nowMs() - (startLap - lap) * BASE_LAP * 1000 });
+    }
   }
 
   const totalLaps = () => (sprint ? 19 : TOTAL_LAPS);
   function setKind(k0) {
     sprint = k0 === 'sprint' || k0 === 'sprintquali'; // Sprint: kurzes Rennen ohne Stopps, Sprint-Quali: kürzere Segmente
     const k = k0 === 'sprint' ? 'race' : k0 === 'sprintquali' ? 'quali' : k0;
-    kind = k; simT = 0; flag = 'green'; flagSince = null; feed = []; overall = [null, null, null]; bestLapAll = null;
+    kind = k; simT = 0; flag = 'green'; flagSince = null; feed = []; neutral = []; neutralFrom = null; overall = [null, null, null]; bestLapAll = null;
     weather = { air: 24, track: 38, rain: false };
     drivers = DRIVERS.map((_, i) => newDriver(i));
     gridLeft = k === 'race' && startGrid > 0 ? startGrid : null;
     if (k === 'race') {
-      drivers.forEach((d, i) => { d.prog = (sprint ? 13 : 31) - i * 0.008; d.secStart = 0; });
+      drivers.forEach((d, i) => { d.prog = (sprint ? 13 : 31) - i * 0.008; d.secStart = 0; seedHistory(d, i, sprint ? 13 : 31); });
     } else if (k === 'quali' || k === 'practice') {
       remaining = k === 'quali' ? (sprint ? 600 : 900) : 3600;
       drivers.forEach((d, i) => {
@@ -118,12 +147,14 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
     if (ev === 'green') {
       if (prev === 'green') return;
       flag = 'green'; flagSince = null;
+      if (neutralFrom != null) { neutral.push([neutralFrom, nowMs()]); neutralFrom = null; }
       say('', 'FLAG', prev === 'red' ? tr('demo.restart') : tr('demo.greenOn'));
       radio('NOR', 'TEAM', tr('demo.r.green'));
       return;
     }
     if (ev === prev) return;
     flag = ev; flagSince = nowMs();
+    if ((ev === 'sc' || ev === 'vsc' || ev === 'red') && neutralFrom == null) neutralFrom = nowMs();
     if (ev === 'sc') { say('yellow', 'SC', tr('demo.scMsg')); radio('LEC', 'BOX', tr('demo.r.scIn')); radio('HAM', 'TEAM', tr('demo.r.scStay')); }
     if (ev === 'vsc') { say('yellow', 'VSC', tr('demo.vscMsg')); }
     if (ev === 'yellow') { say('yellow', 'YELLOW', tr('demo.yellowMsg')); }
@@ -166,7 +197,7 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
     [d.x, d.y] = pointAt(circuit.points, d.prog);
   }
 
-  function completeSector(d, prevSec, dur) {
+  function completeSector(d, prevSec, dur, lapNo) {
     d.secT[prevSec] = dur;
     if (prevSec !== 2) return;
     if (d.secT[0] == null || d.secT[1] == null) { d.secT = []; return; } // angefangene Runde zählt nicht
@@ -185,6 +216,8 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
     }
     d.secT = [];
     d.tyreAge++;
+    d.lapLog.push({ lap: lapNo, time: lap, start: nowMs() - lap * 1000 });
+    if (d.lapLog.length > 80) d.lapLog.shift();
   }
 
   // Sektorzeiten in Sim-Sekunden: eigene Uhr pro Fahrer.
@@ -194,7 +227,7 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
     d.clock = (d.clock || 0) + dt;
     const a = secOf(frac(before)), b = secOf(frac(d.prog));
     if (a !== b || Math.floor(before) !== Math.floor(d.prog)) {
-      completeSector(d, a, d.clock - (d.secClock || 0));
+      completeSector(d, a, d.clock - (d.secClock || 0), Math.floor(before));
       d.secClock = d.clock;
     }
   }
@@ -204,12 +237,12 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
     const lead = sorted[0];
     sorted.forEach((d, i) => {
       if (flag === 'red') { telemetry(d); return; }
-      const lapTime = BASE_LAP + d.skill;
+      const lapTime = BASE_LAP + d.skill + wearOf(d.tyre, d.tyreAge) - FUEL_GAIN * (Math.floor(d.prog) - 1);
       // Tagesform (langsame Schwankung) und Windschatten/DRS hinter dem Vordermann erzeugen Überholmanöver
       const ahead0 = sorted[i - 1];
       const gapAhead = ahead0 ? (ahead0.prog - d.prog) * lapTime : 99;
-      const form = 0.013 * Math.sin(simT / 25 + d.num * 1.7);
-      const draft = flag === 'green' && gapAhead < 1.0 ? 0.013 : 0;
+      const form = 0.006 * Math.sin(simT / 25 + d.num * 1.7);
+      const draft = flag === 'green' && gapAhead < 1.0 ? 0.008 : 0;
       let rate = (1 / lapTime) * (1 + form + draft + (rnd() - 0.5) * 0.006);
       if (flag === 'sc' || flag === 'vsc') {
         const ahead = sorted[i - 1];
@@ -218,8 +251,8 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
         if (ahead && gap < GAP_SC * 0.5) rate = 0.3 / lapTime;
       }
       if (d.pit > 0) { rate *= 0.35; d.pit -= dt; if (d.pit <= 0) { d.pit = 0; } }
-      else if (!sprint && flag === 'green' && d.tyreAge > 20 && rnd() < 0.002 * dt && d.stops < 2) { d.pit = 20; d.stops++; d.tyre = d.tyre === 'S' ? 'M' : 'H'; d.tyreAge = 0; say('', 'PIT', tr('demo.pitMsg', { code: d.code, n: d.stops, tyre: d.tyre === 'M' ? 'Medium' : 'Hard' })); }
-      else if (!sprint && flag === 'sc' && d.tyreAge > 12 && d.stops < 2 && rnd() < 0.01 * dt) { d.pit = 20; d.stops++; d.tyre = 'H'; d.tyreAge = 0; }
+      else if (!sprint && flag === 'green' && d.tyreAge > 20 && rnd() < 0.002 * dt && d.stops < 2) { d.pit = 20; d.stops++; d.tyre = d.tyre === 'S' ? 'M' : 'H'; d.tyreAge = 0; newStint(d); say('', 'PIT', tr('demo.pitMsg', { code: d.code, n: d.stops, tyre: d.tyre === 'M' ? 'Medium' : 'Hard' })); }
+      else if (!sprint && flag === 'sc' && d.tyreAge > 12 && d.stops < 2 && rnd() < 0.01 * dt) { d.pit = 20; d.stops++; d.tyre = 'H'; d.tyreAge = 0; newStint(d); }
       advanceDriver(d, dt, rate);
       telemetry(d);
     });
@@ -303,7 +336,7 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
       : kind === 'practice'
         ? { type: 'practice', kind: 'practice', name: 'Training 2', circuit: circuit.name, remaining, cutoff: null, flagSince }
         : { type: 'quali', kind: sprint ? 'sprintquali' : 'quali', name: sprint ? 'SQ2' : 'Q2', circuit: circuit.name, remaining, cutoff: 10, flagSince };
-    const out = { ...base, startLights: kind === 'race' && gridLeft != null ? { startsAt: Date.now() + gridLeft * 1000, now: Date.now() } : undefined, session, drivers: drivers.map((d) => ({ ...d, onTrack: kind === 'quali' || kind === 'practice' ? d.onTrack : true })) };
+    const out = { ...base, startLights: kind === 'race' && gridLeft != null ? { startsAt: Date.now() + gridLeft * 1000, now: Date.now() } : undefined, session, drivers: drivers.map(({ lapLog, stintLog, ...d }) => ({ ...d, onTrack: kind === 'quali' || kind === 'practice' ? d.onTrack : true, tyres: analyzeTyres(lapLog, stintLog, { windows: neutralFrom != null ? [...neutral, [neutralFrom, Infinity]] : neutral, race: kind === 'race' }) })) };
     if (flag === 'sc') { const [x, y] = pointAt(circuit.points, leader.prog + 0.03); out.safetyCar = { x, y }; }
     return out;
   }

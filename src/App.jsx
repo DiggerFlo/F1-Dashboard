@@ -9,6 +9,7 @@ import { Chrome } from './components/Chrome.jsx';
 import { Main } from './components/Main.jsx';
 import { Calendar } from './components/Calendar.jsx';
 import { Feed } from './components/Feed.jsx';
+import { DriverPanel } from './components/DriverPanel.jsx';
 import { LoadingOverlay } from './components/Loader.jsx';
 import { StateMap } from './components/MapCard.jsx';
 import { Top5 } from './components/Main.jsx';
@@ -61,7 +62,9 @@ export function App() {
         <Layout.Content className="main" id="mainc" tabIndex={-1}>
           {ui.view === 'calendar' ? <Calendar cal={ui.cal} ui={ui} db={ui.db} actions={actions} /> : <Main state={state} ui={ui} hist={hist} refHist={refHist} actions={actions} />}
         </Layout.Content>
-        {hasFeed && <Feed items={[...state.feed, ...ui.events].sort((a, b) => b.t - a.t)} show={ui.show} onShow={actions.showKind} drivers={state.drivers} filter={ui.filter} onFilter={actions.filter} collapsed={!ui.feedOpen} onToggle={actions.toggleFeed} sub={sub} note={state.sourceNote || ''} proxy={params.get('proxy') ?? 'local'} />}
+        {hasFeed && <Feed items={[...state.feed, ...ui.events].sort((a, b) => b.t - a.t)} show={ui.show} onShow={actions.showKind} drivers={state.drivers} filter={ui.filter} onFilter={actions.filter} collapsed={!ui.feedOpen} onToggle={actions.toggleFeed} sub={sub} note={state.sourceNote || ''} proxy={params.get('proxy') ?? 'local'}>
+          {state.drivers.length > 0 && <DriverPanel state={state} sel={ui.sel} hist={hist} refHist={refHist} open={ui.driverPanel} onToggle={actions.toggleDriverPanel} />}
+        </Feed>}
       </div>
       <footer className="foot">
         <span>{t('foot.unofficial')}</span>
