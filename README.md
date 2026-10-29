@@ -25,15 +25,11 @@ npm test           # Tests (Vitest)
 
 Benötigt Node 18 oder neuer. Das UI ist React 18 mit Ant Design 5 (dunkles Theme in `src/theme.js`).
 
-## Veröffentlichen auf GitHub Pages
+## Veröffentlichen
 
-Die App ist eine reine statische Seite (`npm run build` erzeugt `dist/`, `base` ist relativ), sie läuft also auch unter einem Unterpfad wie `https://<nutzer>.github.io/<repository>/`. Der Workflow `.github/workflows/deploy.yml` baut sie bei jedem Push auf `main` oder auf den aktuellen Standardbranch (`claude/f1-dashboard-telemetry-76buoj`, siehe `deploy.yml`), führt die Tests aus und veröffentlicht `dist/`.
+Die App ist eine reine statische Seite: `npm run build` erzeugt `dist/` (`base` ist relativ), der Ordner lässt sich auf jedem statischen Hosting ablegen, auch unter einem Unterpfad. Einen automatischen Deploy gibt es nicht; GitHub Actions führt nur die Tests aus (`.github/workflows/test.yml`).
 
-1. Den Workflow `deploy.yml` committen und pushen. Ein Push auf den Standardbranch genügt; wer lieber einen `main`-Branch nutzt, legt ihn an und stellt ihn unter Settings > Branches als Standard ein.
-2. Im Repository **Settings > Pages > Build and deployment > Source** auf **GitHub Actions** stellen (einmalig).
-3. Unter **Actions** läuft "Deploy to GitHub Pages"; danach ist die Seite unter der oben genannten Adresse erreichbar. Mit "Run workflow" lässt sich ein Neuaufbau von Hand starten.
-
-Grenzen auf GitHub Pages: Es gibt keinen Server, der `/f1static/` weiterreicht (nur Dev-Server und `vite preview`). Funk-Aufnahmen lassen sich abspielen, ihre echte Wellenform und die Transkription brauchen aber CORS; ohne Proxy zeigt der Player eine Ersatzform. Alle Daten (OpenF1, Jolpica, MultiViewer, Fahrerfotos) kommen direkt aus dem Browser.
+Grenzen ohne eigenen Server: Es gibt keinen Server, der `/f1static/` weiterreicht (nur Dev-Server und `vite preview`). Funk-Aufnahmen lassen sich abspielen, ihre echte Wellenform und die Transkription brauchen aber CORS; ohne Proxy zeigt der Player eine Ersatzform. Alle Daten (OpenF1, Jolpica, MultiViewer, Fahrerfotos) kommen direkt aus dem Browser.
 
 ## Datenquellen
 
