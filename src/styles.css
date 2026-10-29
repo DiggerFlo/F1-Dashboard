@@ -72,7 +72,7 @@ button { cursor: pointer; }
 /* ---------- Kopfzeile ---------- */
 .top { position: sticky; top: 0; z-index: 30; display: flex; align-items: center; gap: var(--space-6); height: var(--header-h); padding: 0 var(--space-6); background: var(--surface-1); border-bottom: 1px solid var(--line); }
 .brand { display: flex; align-items: center; gap: var(--space-2); color: var(--ink); text-decoration: none; font: 800 1.625rem/1 var(--font-display); letter-spacing: .03em; text-transform: uppercase; }
-.brand svg { width: 1.375rem; height: 1.375rem; flex: none; }
+.brand img { width: 1.375rem; height: 1.375rem; flex: none; display: block; }
 .top-r { display: flex; align-items: center; gap: var(--space-4); margin-left: auto; flex: none; }
 .status { display: flex; align-items: center; gap: var(--space-2); font-size: .75rem; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; white-space: nowrap; }
 .dot { width: .5rem; height: .5rem; border-radius: 62.4375rem; background: var(--ink-muted); flex: none; }
