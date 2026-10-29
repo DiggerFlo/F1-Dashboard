@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="Pitwall">
+  <title>Pitwall</title>
+  <path d="M4 3h9a6 6 0 0 1 0 12H9v6H4V3Zm5 4v4h4a2 2 0 0 0 0-4H9Z" fill="#f5f5f3" fill-rule="evenodd"/>
+  <rect x="15" y="17" width="5" height="4" fill="#e8112d"/>
+</svg>

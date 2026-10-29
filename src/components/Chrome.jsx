@@ -29,9 +29,7 @@ const activeTab = (state, ui) => {
 };
 const activeKind = (state, ui) => ui.pendingType || state.session.kind || state.session.type;
 
-const Mark = () => (
-  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3h9a6 6 0 0 1 0 12H9v6H4V3Zm5 4v4h4a2 2 0 0 0 0-4H9Z" fill="currentColor" fillRule="evenodd" /><rect x="15" y="17" width="5" height="4" fill="#e8112d" /></svg>
-);
+const Mark = () => <img src="logo.svg" alt="" width="22" height="22" />; // public/logo.svg, auch Favicon-Vorlage (public/favicon.svg)
 
 function statusOf(state) {
   const f = state.flag;

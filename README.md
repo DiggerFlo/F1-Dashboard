@@ -1,3 +1,5 @@
+<img src="public/favicon.svg" alt="" width="40" align="left">
+
 # Pitwall – F1 Live-Dashboard
 
 Dashboard mit Streckenlayout und Fahrerpositionen, Live-Timing, Telemetrie je Fahrer und einer Seitenleiste für Funk und Race-Control-Meldungen. Die Ansicht reagiert auf den Session-Status:
@@ -130,6 +132,10 @@ Die Aufnahmen kommen ohne CORS-Header. Abspielen funktioniert trotzdem, für Wel
 ## OpenF1-Limits
 
 OpenF1 begrenzt die Anfragen (HTTP 429) und antwortet bei Abfragen ohne Treffer mit 404. `createOpenF1Client` stellt die Anfragen deshalb nacheinander (mindestens 0,34 s Abstand, also höchstens 3 pro Sekunde, ohne Token höchstens 28 pro Minute; laut OpenF1-Dokumentation liegt das Limit bei 3 pro Sekunde und 30 pro Minute), wartet bei 429/503 und wiederholt, und behandelt 404 als leere Liste. Ein Sessionwechsel braucht rund 18 Anfragen, bei mehreren Wechseln direkt hintereinander kann es deshalb kurz warten. Live wird gestaffelt abgefragt: Fahrzeuge alle 2 s, Abstände/Positionen/Race Control alle 6 s, Runden/Reifen/Funk/Wetter alle 15 s. Wiederholungen brauchen dagegen nur den Puffer (siehe oben). Mit `?token=` gelten die höheren Limits für angemeldete Nutzer.
+
+## Logo
+
+`public/logo.svg` ist das Pitwall-Zeichen (ein „P“ mit rotem Quadrat, helle Fläche für dunklen Grund), `public/favicon.svg` dieselbe Marke auf dunklem Quadrat als Browser-Symbol. Die Kopfzeile (`src/components/Chrome.jsx`) und `index.html` binden die Dateien ein; eine Änderung am Logo geschieht also nur dort.
 
 ## Aufbau
 
