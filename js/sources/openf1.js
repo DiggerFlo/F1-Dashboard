@@ -165,7 +165,8 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
   const stopSince = new Map(), stopCache = new Map(), stopLoading = new Set();
   const gridSince = new Map(), dnsCache = new Set(), dnsChecked = new Set(); // DNS: Auto, das nach dem Start gar nicht erst losgefahren ist
   let stopBusy = 0; // laufende Einzelabfragen für Standzeiten (die Warteschlange ist knapp: höchstens 28 Anfragen pro Minute) // Ausfälle erkennen, Standzeiten der Boxenstopps
-  let lastBuildNow = null;
+  let frameT = null; // Replay: der Zeitpunkt, zu dem der Puffer abgefragt wurde. Der Zustand zeigt genau diesen Zeitpunkt (nicht ein paar ms später)
+  let lastBuildNow = null, lastTrailT = null; // lastTrailT: Zeitpunkt des vorigen Zustands, ab dem die Messwerte für den Verlauf gesammelt werden
   const windowLoads = new Map();
   let bulkRun = null, bulkFailed = false; // ganze Session für Telemetrie/Positionen im Hintergrund (statt Fenster für Fenster)
   if (replayOnly && !wantType && !sessionKey) wantType = 'race';
@@ -305,7 +306,7 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
 
   async function loadStatic() {
     const k = session.session_key;
-    intervals = new Map(); pos = new Map(); carData = new Map(); loc = new Map(); laps = []; stints = []; control = []; radioRows = []; weather = null; weatherRows = []; pits = []; buffer = null; loadingNow = false; windowLoads.clear(); bulkRun = null; bulkFailed = false; stopCache.clear(); stopLoading.clear(); stopSince.clear(); gridSince.clear(); dnsCache.clear(); dnsChecked.clear();
+    intervals = new Map(); pos = new Map(); carData = new Map(); loc = new Map(); laps = []; stints = []; control = []; radioRows = []; weather = null; weatherRows = []; pits = []; buffer = null; loadingNow = false; windowLoads.clear(); bulkRun = null; bulkFailed = false; stopCache.clear(); stopLoading.clear(); stopSince.clear(); gridSince.clear(); dnsCache.clear(); dnsChecked.clear(); lastTrailT = null; frameT = null;
     const ds = await get(`drivers?session_key=${k}`);
     drivers = new Map(ds.map((d) => [d.driver_number, d]));
     // Streckenlayout: Positionsdaten einer Runde eines Fahrers, auf das Layout aus f1-circuits-svg abgebildet
@@ -475,7 +476,7 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
   }
 
   function build() {
-    const now = vnow();
+    const now = replay && frameT != null && !loadingNow ? frameT : vnow();
     // Fehlertext in der aktuellen Sprache. Netzwerk- und 401-Fehler deuten auf die Sperre während einer laufenden Session (der Browser meldet sie als CORS-Fehler):
     // liegt jetzt laut Rennkalender eine Session im Gange, wird sie genannt (liveLock), sonst bleibt es beim allgemeinen Hinweis
     const blocked = noteMsg && looksLikeBlock(noteMsg);
@@ -509,6 +510,8 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
     for (const l of doneLaps) { const a = lapsBy.get(l.driver_number) || []; a.push({ lap: l.lap_number, time: l.lap_duration, start: Date.parse(l.date_start) }); lapsBy.set(l.driver_number, a); }
     if (lastBuildNow != null && (now < lastBuildNow || now - lastBuildNow > 15000)) stopSince.clear(); // Sprung in der Wiederholung
     lastBuildNow = now;
+    const trailFrom = replay && buffer && lastTrailT != null && now > lastTrailT && now - lastTrailT < 20000 * Math.max(1, clock.speed) ? lastTrailT : null;
+    lastTrailT = now;
     const rs = raceStart();
     const raceOn = type === 'race' && (rs != null ? now > rs + 30000 : doneLaps.length > 0) && flag !== 'red' && flag !== 'chequered';
     const rows = [...drivers.values()].map((d) => {
@@ -535,6 +538,8 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
         num: n, code: d.name_acronym, name: d.last_name || d.full_name, team: d.team_name || null, color: d.team_colour ? `#${d.team_colour}` : null, photo: safePhoto(d.headshot_url), pos: pos.get(n)?.position ?? 99, gap: iv?.gap_to_leader != null && typeof iv.gap_to_leader === 'number' ? iv.gap_to_leader : null,
         interval: typeof iv?.interval === 'number' ? iv.interval : null, last: o?.last?.lap_duration ?? null, best: o?.best ?? null, sectors: secs,
         sectorCls: secs.map((v, i) => sectorClass(v, o?.bestSec[i], overall[i])), tyre: stint?.compound ? stint.compound[0] : null, stops: stint ? stint.stint_number - 1 : 0,
+        // alle Messwerte seit dem vorigen Zustand (rund 4 pro Sekunde): der Verlauf der Telemetrie wird damit feiner als die Takte der Anzeige
+        trail: trailFrom != null && buffer ? buffer.carRows(n, trailFrom + 1, now).rows.map((r) => ({ speed: r.speed, throttle: r.throttle || 0, brake: r.brake || 0 })) : null,
         tyres: analyzeTyres(lapsBy.get(n) || [], stints.filter((x) => x.driver_number === n && x.lap_start <= (o?.lap || 0) + 1).map((x) => ({ n: x.stint_number, compound: x.compound ? x.compound[0] : null, from: x.lap_start, to: x.lap_end != null && x.lap_end <= (o?.lap || 0) ? x.lap_end : null, ageAtStart: x.tyre_age_at_start || 0 })), { windows, race: type === 'race' }),
         speed: c?.speed ?? null, throttle: c?.throttle ?? null, brake: c?.brake ?? null, gear: c?.n_gear ?? null, rpm: c?.rpm ?? null, drs: !era2026 && (c?.drs ?? 0) >= 10, ovt: era2026 && type === 'race' && overtake?.open === true && flag === 'green' && typeof iv?.interval === 'number' && iv.interval <= 1, pit: inPit ? 1 : 0, pitSince: inPit ? Date.parse(pitRec.date) - ((pitRec.lane_duration || pitRec.pit_duration) || 22) * 1000 : null, status, x: p?.x ?? null, y: p?.y ?? null, onTrack: !!p,
       };
@@ -608,6 +613,7 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
         if (t > next - buffer.windowMs * 0.65 && next < sessionEnd() && !buffer.has(next)) loadWindow(next).catch(() => {});
       }
       startBulk();
+      frameT = t;
       const smp = buffer.sample(t);
       carData = smp.carData; intervals = smp.intervals; pos = smp.position;
       loc = new Map([...smp.location].map(([n, p]) => { const [x, y] = toTrack(p.x, -p.y); return [n, { x, y }]; }));

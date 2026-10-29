@@ -630,7 +630,7 @@ button { cursor: pointer; }
 .tt .tv.sm { font-size: 1.625rem; line-height: 1.875rem; text-transform: uppercase; }
 .tspeed { border-top-color: var(--tc); }
 .sbar2 { display: block; height: .25rem; background: var(--line); }
-.sbar2 i { display: block; height: 100%; background: var(--tc); transition: width .3s; }
+.sbar2 i { display: block; height: 100%; background: var(--tc); transition: width var(--tick, .5s) linear; }
 .tgear .tv { text-align: center; }
 .leds { display: flex; gap: 3px; margin: .25rem 0; }
 .leds i { flex: 1 1 0; height: .875rem; border-radius: 62.4375rem; background: #24242b; transition: background .08s, box-shadow .08s; }
@@ -642,7 +642,7 @@ button { cursor: pointer; }
 .ped { display: grid; grid-template-columns: 3.25rem 1fr 2.5rem; align-items: center; gap: var(--space-2); }
 .ped .mono { text-align: right; font-size: .75rem; font-weight: 700; }
 .pbar2 { display: block; height: .5rem; background: var(--line); }
-.pbar2 i { display: block; height: 100%; transition: width .15s; }
+.pbar2 i { display: block; height: 100%; transition: width var(--tick, .5s) linear; }
 .pbar2 i.th { background: var(--ink); }
 .pbar2 i.br { background: var(--race-red); }
 .tmode.on { border-top-color: var(--tg); }
@@ -995,3 +995,4 @@ button { cursor: pointer; }
   .sidebody { max-height: 24rem; }
   .dpanel { max-height: none; }
 }
+.dp-pedals .ped { grid-template-columns: 4.75rem 1fr 2.75rem; }

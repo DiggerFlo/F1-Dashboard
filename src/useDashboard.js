@@ -7,6 +7,7 @@ import { createCarAnimator } from '../js/track.js';
 import { createDemoSource } from '../js/sources/demo.js';
 import { yearsFor } from '../js/calendar.js';
 import { createOpenF1Source } from '../js/sources/openf1.js';
+import { noteTick } from './tick.js';
 
 const sessionId = (s) => `${s.session.type}|${s.session.name}|${s.session.circuit}`;
 const TAB_LABEL = { upcoming: 'tab.upcoming', session: 'tab.session', race: 'tab.race', sprint: 'tab.sprint', quali: 'tab.quali', sprintquali: 'tab.sprintquali', practice: 'tab.practice', calendar: 'tab.calendar' }; // Schlüssel, übersetzt erst die Ladeanzeige
@@ -91,12 +92,16 @@ export function useDashboard() {
         if (fresh.length) setEvents((e) => [...fresh.filter((f) => !e.some((x) => x.id === f.id)), ...e].slice(0, 150));
       } else if (!same) { animator.reset(); setEvents([]); }
       setEvents((e) => (e.some((x) => x.t > s.now) ? e.filter((x) => x.t <= s.now) : e)); // zurückgespult: Ereignisse aus der Zukunft entfernen
-      animator.update(s, performance.now());
+      const nowMs = performance.now();
+      if (core.current.lastAt != null) noteTick(nowMs - core.current.lastAt);
+      core.current.lastAt = nowMs;
+      animator.update(s, nowMs);
       for (const d of s.drivers) {
         if (d.speed == null) continue;
         const h = hist.get(d.num) || [];
-        h.push({ speed: d.speed, throttle: d.throttle || 0, brake: d.brake || 0 });
-        if (h.length > 120) h.shift();
+        // Quellen liefern alle Messwerte seit dem vorigen Zustand (trail): der Verlauf ist so feiner als die Takte der Anzeige
+        h.push(...(d.trail?.length ? d.trail : [{ speed: d.speed, throttle: d.throttle || 0, brake: d.brake || 0 }]));
+        if (h.length > 240) h.splice(0, h.length - 240);
         hist.set(d.num, h);
       }
       core.current.prev = s;

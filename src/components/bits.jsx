@@ -1,5 +1,6 @@
 import { Card, Progress, Statistic, Tag } from 'antd';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { getTick } from '../tick.js';
 import { safeColor, fmtSector } from '../../js/format.js';
 import { tyreInfo, teamColor } from '../../js/teams.js';
 import { t } from '../../js/i18n.js';
@@ -78,3 +79,29 @@ export function Section({ title, meta, label, children }) {
 export const WarnIcon = () => (
   <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M8 1.5 15 14H1L8 1.5Z" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" /><path d="M8 6.5v3.5M8 12v.01" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>
 );
+
+/**
+ * Zahl, die zum neuen Wert gleitet, statt zu springen (Dauer = Takt der Datenquelle). Der Text wird direkt im DOM gesetzt,
+ * nur diese Zelle wird dabei neu gezeichnet. React schreibt ihn nach dem ersten Zeichnen nicht mehr an (fester Anfangstext).
+ */
+export function Tween({ value, format = Math.round, ms }) {
+  const ref = useRef(null);
+  const cur = useRef(typeof value === 'number' ? value : null);
+  const first = useRef(typeof value === 'number' ? String(format(value)) : '—');
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return undefined;
+    if (typeof value !== 'number') { cur.current = null; el.textContent = '—'; return undefined; }
+    const from = cur.current ?? value, t0 = performance.now(), dur = ms ?? getTick();
+    let id;
+    const step = (now) => {
+      const k = dur > 0 ? Math.min(1, (now - t0) / dur) : 1;
+      cur.current = from + (value - from) * k;
+      el.textContent = String(format(cur.current));
+      if (k < 1) id = requestAnimationFrame(step);
+    };
+    id = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(id);
+  }, [value, ms]); // eslint-disable-line react-hooks/exhaustive-deps
+  return <span ref={ref}>{first.current}</span>;
+}

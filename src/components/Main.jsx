@@ -10,7 +10,7 @@ import { sessionLabel, sameSession } from '../../js/sessions.js';
 import { useNarrow } from '../useNarrow.js';
 import { useWallNow } from '../useWallNow.js';
 import { Countdown } from './Countdown.jsx';
-import { Html, Tyre, CodeCell, Sector, Bar, Badge, Kpi, Section, Swatch, Face, Avatar } from './bits.jsx';
+import { Html, Tyre, CodeCell, Sector, Bar, Badge, Kpi, Section, Swatch, Face, Avatar, Tween } from './bits.jsx';
 import { StateMap } from './MapCard.jsx';
 
 function kpisFor(state) {
@@ -126,7 +126,7 @@ export function ShiftLights({ rpm }) {
 }
 
 export const Pedal = ({ label, v, cls }) => (
-  <div className="ped"><span className="label">{label}</span><span className="pbar2"><i className={cls} style={{ width: `${Math.round(Math.min(100, Math.max(0, v || 0)))}%` }} /></span><span className="mono">{Math.round(v || 0)}%</span></div>
+  <div className="ped"><span className="label">{label}</span><span className="pbar2"><i className={cls} style={{ width: `${Math.round(Math.min(100, Math.max(0, v || 0)))}%` }} /></span><span className="mono"><Tween value={Math.min(100, Math.max(0, v || 0))} />%</span></div>
 );
 
 /** Overtake-Modus (ab 2026) bzw. DRS des Fahrers: Beschriftung, Wert, Hinweis, ob aktiv. */
@@ -163,7 +163,7 @@ function Detail({ state, sel, hist, refHist }) {
         </Card>
         <div className="tmain">
           <div className="tdash">
-            <div className="tt tspeed"><span className="label">{t('tele.speed')}</span><span className="tv">{hasSpeed ? Math.round(d.speed) : '—'}<small>{t('unit.kmh')}</small></span><span className="sbar2"><i style={{ width: `${hasSpeed ? Math.min(100, (d.speed / 350) * 100) : 0}%` }} /></span></div>
+            <div className="tt tspeed"><span className="label">{t('tele.speed')}</span><span className="tv"><Tween value={hasSpeed ? d.speed : null} /><small>{t('unit.kmh')}</small></span><span className="sbar2"><i style={{ width: `${hasSpeed ? Math.min(100, (d.speed / 350) * 100) : 0}%` }} /></span></div>
             <div className="tt tgear"><span className="label">{t('tbl.gear')}</span><span className="tv">{d.gear == null ? '—' : d.gear === 0 ? 'N' : d.gear}</span></div>
             <div className="tt trpm"><span className="label">{t('tele.rpm')}</span><ShiftLights rpm={d.rpm} /><span className="mono trv">{d.rpm != null ? `${dec((d.rpm / 1000).toFixed(1))}k` : '—'} <span className="muted">{t('tele.rpmUnit')}</span></span></div>
             <div className="tt tped"><Pedal label={t('tele.throttle')} v={d.throttle} cls="th" /><Pedal label={t('tele.brake')} v={d.brake} cls="br" /></div>

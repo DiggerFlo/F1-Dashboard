@@ -20,6 +20,9 @@ const TEAMS = [['McLaren', '#ff8000'], ['Ferrari', '#e8002d'], ['Red Bull Racing
   ['Racing Bulls', '#6692ff'], ['Aston Martin', '#229971'], ['Haas', '#b6babd'], ['Kick Sauber', '#52e252'], ['Alpine', '#ff87bc']];
 const COMPOUNDS = ['M', 'H', 'M', 'S', 'H', 'M', 'H', 'M', 'S', 'H', 'M', 'H', 'M', 'H', 'S', 'M', 'H', 'M', 'H', 'M'];
 const BASE_LAP = 92.4;
+const MICRO = 5; // Teilschritte je Takt
+const MIN_GAP = 0.0027; // Mindestabstand im Rennen in Runden (rund 0,25 s)
+const PASS_ADV = 0.002; // so viel schneller als der Vordermann (0,2 %) muss ein Auto sein, um vorbeizuziehen
 const DEG = { S: 0.1, M: 0.06, H: 0.035, I: 0.05, W: 0.04 }; // Reifenabbau in s pro Runde der Reifenalter (Demo-Modell)
 const wearOf = (c, age) => (DEG[c] ?? 0.06) * age * (1 + age / 60);
 const TOTAL_LAPS = 57;
@@ -176,8 +179,8 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
     } else if (kind === 'race') {
       const lead = drivers[0];
       drivers.forEach((d, i) => {
-        d.gap = i === 0 ? 0 : (lead.prog - d.prog) * (BASE_LAP + d.skill);
-        d.interval = i === 0 ? 0 : (drivers[i - 1].prog - d.prog) * (BASE_LAP + d.skill);
+        d.gap = i === 0 ? 0 : (lead.prog - d.prog) * BASE_LAP;
+        d.interval = i === 0 ? 0 : (drivers[i - 1].prog - d.prog) * BASE_LAP;
       });
     }
   }
@@ -241,9 +244,10 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
       // Tagesform (langsame Schwankung) und Windschatten/DRS hinter dem Vordermann erzeugen Überholmanöver
       const ahead0 = sorted[i - 1];
       const gapAhead = ahead0 ? (ahead0.prog - d.prog) * lapTime : 99;
-      const form = 0.006 * Math.sin(simT / 25 + d.num * 1.7);
-      const draft = flag === 'green' && gapAhead < 1.0 ? 0.008 : 0;
-      let rate = (1 / lapTime) * (1 + form + draft + (rnd() - 0.5) * 0.006);
+      const form = 0.003 * Math.sin(simT / 60 + d.num * 1.7);
+      const draft = flag === 'green' && gapAhead < 1.0 ? 0.008 * clamp((gapAhead - 0.12) / 0.5, 0, 1) : 0; // Windschatten: nimmt zum Vordermann hin ab, sonst tauschen zwei Autos ständig die Plätze
+      d.pace = (1 / lapTime) * (1 + form + draft); // Tempo ohne Zufallsrauschen: darüber entscheidet, wer vorbeizieht
+      let rate = d.pace * (1 + (rnd() - 0.5) * 0.006);
       if (flag === 'sc' || flag === 'vsc') {
         const ahead = sorted[i - 1];
         const gap = ahead ? ahead.prog - d.prog : 1;
@@ -253,6 +257,15 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
       if (d.pit > 0) { rate *= 0.35; d.pit -= dt; if (d.pit <= 0) { d.pit = 0; } }
       else if (!sprint && flag === 'green' && d.tyreAge > 20 && rnd() < 0.002 * dt && d.stops < 2) { d.pit = 20; d.stops++; d.tyre = d.tyre === 'S' ? 'M' : 'H'; d.tyreAge = 0; newStint(d); say('', 'PIT', tr('demo.pitMsg', { code: d.code, n: d.stops, tyre: d.tyre === 'M' ? 'Medium' : 'Hard' })); }
       else if (!sprint && flag === 'sc' && d.tyreAge > 12 && d.stops < 2 && rnd() < 0.01 * dt) { d.pit = 20; d.stops++; d.tyre = 'H'; d.tyreAge = 0; newStint(d); }
+      // Mindestabstand zum Vordermann (Autos überlappen nicht); wer deutlich schneller ist, zieht vorbei, sonst folgt er
+      if (flag === 'green' && ahead0 && d.pit <= 0 && ahead0.pit <= 0) {
+        const room = ahead0.prog - MIN_GAP - d.prog;
+        if (rate * dt > room) {
+          if (d.pace > ahead0.pace * (1 + PASS_ADV) && simT - (d.passedAt ?? -1e9) > 45 && !(d.passed?.num === ahead0.num && simT - d.passed.t < 300)) { rate = Math.max(rate, (ahead0.prog + MIN_GAP * 0.5 - d.prog) / dt); d.passedAt = simT; ahead0.passed = { num: d.num, t: simT }; }
+          else rate = Math.max(0, room) / dt;
+        }
+      }
+      d.rate = rate;
       advanceDriver(d, dt, rate);
       telemetry(d);
     });
@@ -297,8 +310,11 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
     if (scenario === 'auto') {
       while (autoIdx < AUTO.length && realT >= AUTO[autoIdx][0]) { const fn = AUTO[autoIdx][1]; autoIdx++; fn(); }
     }
+    // Mehrere kleine Schritte je Takt: die Telemetrie (Verlauf, Pedale) bekommt so mehr Messpunkte als die Anzeige Takte hat
+    for (const d of drivers) d.trail = [];
+    const micro = (fn) => { for (let k = 0; k < MICRO; k++) { fn(dt / MICRO); for (const d of drivers) d.trail.push({ speed: d.speed, throttle: d.throttle, brake: d.brake }); } };
     if (kind === 'race') {
-      stepRace(dt);
+      micro(stepRace);
       if (flag === 'green' && rnd() < 0.004 * dtReal) {
         const v = drivers[Math.floor(rnd() * drivers.length)];
         say('yellow', 'PENALTY', tr('demo.penalty', { num: v.num, code: v.code }));
@@ -309,7 +325,7 @@ export function createDemoEngine({ scenario = 'auto', seed = 7, now = Date.now()
         radio(d.code, r[0], r[1], true);
       }
     } else if (kind === 'quali' || kind === 'practice') {
-      stepQuali(dt);
+      micro(stepQuali);
       if (rnd() < 0.04 * dtReal) { const d = drivers[Math.floor(rnd() * 10)]; radio(d.code, 'TEAM', tr('demo.r.traffic'), true); }
     }
     if (kind !== 'upcoming') refreshPositions();

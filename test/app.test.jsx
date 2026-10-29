@@ -289,21 +289,39 @@ test('nearestFraction inverts pointAt', () => {
   }
 });
 
-test('animator: moves along the track between updates, also across the start line', () => {
+/** Fortschritt eines Autos auf der Strecke (Anteil der Runde, entlang der Strecke gemessen) */
+const along = (a, t) => nearestFraction(LOOP, ...a.sample(t).get(1));
+
+test('animator: moves smoothly along the track and keeps going through irregular updates, also across the start line', () => {
   const a = createCarAnimator();
-  a.update(stateAt(0.90), 0);
-  a.update(stateAt(0.98), 500); // 8 % einer Runde in 500 ms
-  for (const t of [500, 600, 750, 900, 1000]) {
+  // 8 % einer Runde pro 500 ms, aber die Zustände kommen unregelmäßig (300 ms, 700 ms, 500 ms ...)
+  const arrivals = [0, 500, 800, 1500, 2000, 2500];
+  let f = 0.9;
+  a.update(stateAt(f), 0);
+  let last = null, steps = [];
+  for (let t = 0; t <= 3000; t += 16) {
+    const at = arrivals.indexOf(t - (t % 16));
+    for (const arr of arrivals) if (arr > 0 && arr >= t - 15 && arr < t + 1 && arr !== last) { f = (0.9 + 0.08 * (arr / 500)) % 1; a.update(stateAt(f), arr); last = arr; }
     const p = a.sample(t).get(1);
     assert.ok(distToLoop(p) < 1.5, `liegt auf der Strecke bei t=${t}`);
+    const g = nearestFraction(LOOP, ...p);
+    if (t > 600) steps.push((((g - (steps.prev ?? g)) % 1) + 1) % 1);
+    steps.prev = g;
   }
-  const mid = a.sample(750).get(1);
-  const [ex, ey] = pointAt(LOOP, 0.94);
-  assert.ok(Math.hypot(mid[0] - ex, mid[1] - ey) < 3, 'Mitte entspricht Streckenmitte, nicht der Sehne');
-  a.update(stateAt(0.04), 1000); // über Start/Ziel
-  const wrap = a.sample(1250).get(1);
-  const [wx, wy] = pointAt(LOOP, 0.01);
-  assert.ok(Math.hypot(wrap[0] - wx, wrap[1] - wy) < 4, 'läuft über die Ziellinie statt rückwärts');
+  const real = steps.filter((x) => x < 0.5);
+  assert.ok(real.every((x) => x >= 0), 'nie rückwärts');
+  const sorted = [...real].sort((x, y) => x - y);
+  const med = sorted[sorted.length >> 1], p95 = sorted[Math.floor(sorted.length * 0.95)];
+  assert.ok(p95 < med * 1.8 && sorted[Math.floor(sorted.length * 0.05)] > med * 0.4, `gleichmäßiges Tempo: p5 ${sorted[Math.floor(sorted.length * 0.05)]}, Median ${med}, p95 ${p95}`);
+  assert.ok(f !== 0.9, 'Zustände kamen an');
+});
+
+test('animator: after the last update the car keeps moving a little, then waits instead of running off', () => {
+  const a = createCarAnimator();
+  a.update(stateAt(0.20), 0); a.update(stateAt(0.26), 500);
+  const p0 = along(a, 500), p1 = along(a, 700), p2 = along(a, 5000);
+  assert.ok(p1 > p0, 'fährt weiter');
+  assert.ok(p2 - p1 < 0.1 && p2 < 0.26 + 0.12 * 1.6, 'läuft nicht davon, wenn der nächste Zustand ausbleibt');
 });
 
 test('animator: snaps on big jumps, drops cars that leave, handles no track', () => {
@@ -1295,7 +1313,7 @@ test('buffer: with whole-session data every time is covered, windows are dropped
   assert.equal(b.size, 0, 'Fenster freigegeben');
   const s = b.sample(t0 + 300500);
   assert.equal(s.carData.get(1).speed, 200);
-  assert.equal(s.location.get(1).x, 300);
+  assert.ok(Math.abs(s.location.get(1).x - 300.5) < 1e-4, 'zwischen zwei Messungen überblendet');
   assert.equal(b.sample(t0 + 3600000).carData.size, 0, 'nach dem Ende der Daten kein Geisterauto');
   assert.equal(b.moved(1, t0, t0 + 5000), false);
   assert.equal(b.moved(1, t0 + 20000, t0 + 25000), true);
@@ -1551,4 +1569,77 @@ test('openf1 replay: laps and stints become tyre analysis (stint length, age, de
   assert.equal(d.tyres.stints[0].to, 10);
   assert.equal(d.tyres.cur.times[0].why, 'out');
   src.stop();
+});
+
+test('buffer: values between two measurements are interpolated (windows and whole session), not held', () => {
+  const t0 = Date.parse('2025-01-01T00:00:00Z');
+  const row = (ms, speed, x, extra = {}) => ({ driver_number: 1, date: new Date(t0 + ms).toISOString(), speed, throttle: speed / 3, brake: 0, n_gear: 5, rpm: speed * 40, drs: 0, x, y: -x, ...extra });
+  const car = [row(0, 100, 0), row(300, 200, 30, { n_gear: 6, drs: 12 }), row(5000, 50, 500)]; // Lücke zwischen 300 ms und 5 s
+  const check = (b) => {
+    const near = (a, e) => assert.ok(Math.abs(a - e) < 1e-3, `${a} statt ${e}`); // Float32 im Ganze-Session-Speicher
+    const s = b.sample(t0 + 150);
+    near(s.carData.get(1).speed, 150);
+    near(s.carData.get(1).throttle, 50);
+    near(s.carData.get(1).rpm, 6000);
+    assert.equal(s.carData.get(1).n_gear, 5, 'Gang springt erst mit der Messung');
+    near(s.location.get(1).x, 15);
+    near(s.location.get(1).y, -15);
+    near(b.sample(t0 + 300).carData.get(1).speed, 200);
+    near(b.sample(t0 + 2000).carData.get(1).speed, 200); // über eine Lücke wird nicht geraten
+    assert.equal(b.sample(t0 - 1).carData.size, 0);
+  };
+  const w = createReplayBuffer({ origin: t0, windowMs: 60000 });
+  w.add(t0, { carData: car, location: car });
+  check(w);
+  const bulk = createReplayBuffer({ origin: t0 });
+  bulk.setBulk('carData', toColumns(car, CAR_FIELDS));
+  bulk.setBulk('location', toColumns(car, ['x', 'y']));
+  check(bulk);
+});
+
+test('openf1 replay: values at the state time are interpolated and every measurement since the last state arrives as trail', async () => {
+  const base = fakeRace();
+  const t0 = Date.parse(base.session.date_start) + 2 * 60000;
+  const rows = [];
+  for (let i = -1200; i < 6000; i++) rows.push({ driver_number: 1, date: new Date(t0 + i * 250).toISOString(), speed: 100 + i * 0.25, throttle: 50, brake: 0, n_gear: 5, rpm: 9000, drs: 0 });
+  const client = async (path) => (path.startsWith('car_data') ? rows.filter((r) => { const q = path.split('?')[1] || ''; const lo = /date(?:>|%3E)=?([^&]+)/.exec(q), hi = /date(?:<|%3C)([^&]+)/.exec(q); const x = Date.parse(r.date); return (!lo || x >= Date.parse(decodeURIComponent(lo[1]))) && (!hi || x < Date.parse(decodeURIComponent(hi[1]))); }) : base.client(path));
+  const src = createOpenF1Source({ client, jolpica: base.jolpica, replayOnly: true, speed: 4, bulk: false });
+  const states = [];
+  src.start((s) => states.push(s));
+  const withSpeed = (s) => s.drivers.find((x) => x.code === 'NOR')?.speed != null && !s.replay.loading;
+  await waitFor(() => states.filter(withSpeed).length >= 3, 6000);
+  const ok = states.filter(withSpeed).slice(-2);
+  for (const s of ok) {
+    const d = s.drivers.find((x) => x.code === 'NOR');
+    const expected = 100 + (s.replay.t - t0) / 1000; // Rampe: 1 km/h pro Sekunde
+    assert.ok(Math.abs(d.speed - expected) < 0.05, `Geschwindigkeit ${d.speed}, erwartet ${expected}`);
+  }
+  const last = ok.at(-1).drivers.find((x) => x.code === 'NOR');
+  assert.ok(last.trail && last.trail.length >= 3, `Verlauf: ${last.trail?.length} Messwerte`);
+  assert.ok(last.trail.every((r, i, a) => i === 0 || r.speed > a[i - 1].speed), 'in zeitlicher Reihenfolge');
+  src.stop();
+});
+
+test('demo: every state brings several telemetry points per driver (finer trace than the display ticks)', () => {
+  const e = createDemoEngine({ scenario: 'race', seed: 3 });
+  run(e, 5);
+  e.step(0.5);
+  const d = e.state().drivers[0];
+  assert.ok(d.trail.length >= 4 && d.trail.every((r) => typeof r.speed === 'number'));
+});
+
+test('demo: cars keep a minimum gap and overtakes are real passes, not flickering order swaps', () => {
+  const e = createDemoEngine({ scenario: 'race', seed: 11 });
+  let prev = e.state();
+  const pairs = new Map();
+  let minGap = Infinity;
+  for (let i = 0; i < 400; i++) {
+    e.step(0.5);
+    const s = e.state();
+    for (const o of detectOvertakes(prev, s)) pairs.set(`${o.by}>${o.over}`, (pairs.get(`${o.by}>${o.over}`) || 0) + 1);
+    for (let k = 1; k < s.drivers.length; k++) if (!s.drivers[k].pit && !s.drivers[k - 1].pit) minGap = Math.min(minGap, s.drivers[k - 1].prog - s.drivers[k].prog);
+    prev = s;
+  }
+  assert.ok(Math.max(...pairs.values(), 0) <= 4, `ein Paar wechselt höchstens ein paar Mal: ${JSON.stringify([...pairs].filter(([, n]) => n > 4))}`);
+  assert.ok(minGap > 0.001, `Mindestabstand ${minGap}`); // nach einem Überholen mindestens ein halber Mindestabstand
 });
