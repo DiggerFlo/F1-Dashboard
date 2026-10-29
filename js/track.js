@@ -96,34 +96,38 @@ export function aheadOf(points, x, y, frac = 0.012) {
 }
 
 /**
- * Bewegt die Fahrzeuge zwischen zwei Datenständen flüssig entlang der Strecke (nicht auf der Sehne).
+ * Bewegt die Fahrzeuge flüssig entlang der Strecke (nicht auf der Sehne), obwohl die Daten nur alle 0,5 bis 2 s kommen.
  * update(state, now) bei jedem neuen Zustand, sample(now) pro Bild -> Map(num | 'sc' -> [x, y]).
- * Autos in der Boxengasse (d.pit) werden nicht gezeigt: die Boxengasse liegt zu nah an der Strecke, um sie auf der Karte zu trennen.
+ *
+ * Jedes Auto hat ein Ziel (Anteil der Runde laut letztem Zustand) und ein geschätztes Tempo (Runden pro ms, geglättet).
+ * Das Ziel wird mit diesem Tempo weitergerechnet, die Anzeige folgt ihm mit kurzer Verzögerung. So bleibt die Bewegung gleichmäßig,
+ * auch wenn Zustände unregelmäßig eintreffen (kein Stehenbleiben und Aufholen), und die Anzeige hängt nicht einen ganzen Takt hinterher.
  */
 export function createCarAnimator() {
   const cars = new Map();
-  let points = null, lastT = null;
+  let points = null, lastT = null, lastS = null, ema = 500;
+  const TAU = 180;       // ms: so träge folgt die Anzeige dem hochgerechneten Ziel
+  const MAX_V = 0.0002;  // Runden pro ms (eine Runde in 5 s) als Obergrenze für Ausreißer
 
-  const frac = (c, now) => {
-    const t = c.dur ? Math.min(1, Math.max(0, (now - c.t0) / c.dur)) : 1;
-    return c.f0 + (c.f1 - c.f0) * t;
-  };
-
-  function track(key, f, now, dur) {
+  function track(key, f, now) {
     const c = cars.get(key);
-    if (!c) { cars.set(key, { f0: f, f1: f, t0: now, dur: 0 }); return; }
-    const cur = frac(c, now);
-    let delta = (((f - cur) % 1) + 1) % 1;
+    if (!c) { cars.set(key, { pos: f, tgt: f, tgtT: now, v: 0 }); return; }
+    let delta = ((((f - c.tgt) % 1) + 1) % 1);
     if (delta > 0.5) delta -= 1;
-    if (Math.abs(delta) > 0.3) { c.f0 = c.f1 = f; c.dur = 0; c.t0 = now; return; } // Sprung (Neustart, Datenlücke): nicht überblenden
-    c.f0 = cur; c.f1 = cur + delta; c.t0 = now; c.dur = dur;
+    if (Math.abs(delta) > 0.3) { c.pos = c.tgt = f; c.v = 0; c.tgtT = now; return; } // Sprung (Boxengasse, Neustart, Datenlücke): nicht überblenden
+    if (delta < 0 && delta > -0.05) delta = 0; // Autos fahren nicht rückwärts: Rauschen in der Position bleibt ohne Wirkung
+    const dt = Math.max(50, now - c.tgtT);
+    const vNew = Math.min(MAX_V, Math.max(0, delta / dt));
+    c.v = c.v === 0 ? vNew : c.v * 0.5 + vNew * 0.5;
+    c.tgt += delta;
+    c.tgtT = now;
   }
 
   return {
     update(state, now) {
       points = state.track?.points?.length ? state.track.points : null;
       if (!points) { cars.clear(); return; }
-      const dur = lastT == null ? 500 : Math.min(3000, Math.max(150, now - lastT));
+      if (lastT != null) ema = ema * 0.7 + Math.min(3000, Math.max(150, now - lastT)) * 0.3; // gleitender Takt
       lastT = now;
       const seen = new Set();
       const done = []; // schon zugeordnete Autos: [x, y, Anteil]
@@ -134,23 +138,31 @@ export function createCarAnimator() {
         for (const d of on) {
           const known = cars.get(d.num);
           if ((pass === 0) !== !!known) continue;
-          let hint = known?.f1;
+          let hint = known?.tgt;
           if (hint == null && done.length) hint = done.reduce((b, c) => (Math.hypot(c[0] - d.x, c[1] - d.y) < Math.hypot(b[0] - d.x, b[1] - d.y) ? c : b))[2];
-          const f = nearestFraction(points, d.x, d.y, hint);
+          const f = nearestFraction(points, d.x, d.y, hint == null ? undefined : ((hint % 1) + 1) % 1);
           done.push([d.x, d.y, f]);
-          seen.add(d.num); track(d.num, f, now, dur);
+          seen.add(d.num); track(d.num, f, now);
         }
       }
-      if (state.safetyCar?.x != null) { seen.add('sc'); track('sc', nearestFraction(points, state.safetyCar.x, state.safetyCar.y, cars.get('sc')?.f1), now, dur); }
+      if (state.safetyCar?.x != null) { seen.add('sc'); track('sc', nearestFraction(points, state.safetyCar.x, state.safetyCar.y, cars.has('sc') ? ((cars.get('sc').tgt % 1) + 1) % 1 : undefined), now); }
       for (const k of [...cars.keys()]) if (!seen.has(k)) cars.delete(k);
     },
     sample(now) {
       const out = new Map();
       if (!points) return out;
-      for (const [k, c] of cars) out.set(k, pointAtFast(points, frac(c, now)));
+      const dtF = lastS == null ? 0 : Math.min(100, Math.max(0, now - lastS));
+      lastS = now;
+      const k = 1 - Math.exp(-dtF / TAU);
+      for (const [key, c] of cars) {
+        const ahead = Math.min(Math.max(0, now - c.tgtT), ema * 1.5); // weiter als anderthalb Takte wird nicht geraten
+        const want = c.tgt + c.v * ahead;
+        if (Math.abs(want - c.pos) > 0.3) c.pos = want; else c.pos += (want - c.pos) * k;
+        out.set(key, pointAtFast(points, c.pos));
+      }
       return out;
     },
-    reset() { cars.clear(); lastT = null; },
+    reset() { cars.clear(); lastT = null; lastS = null; },
   };
 }
 
@@ -287,7 +299,7 @@ export function trackSvg(state, selNum, pos = null, opts = {}) {
 /** Telemetrie-Verlauf in drei Spuren (Geschwindigkeit, Gas, Bremse) aus einer Historie [{speed,throttle,brake}]. */
 export function tracesSvg(hist, ref, color = '#f5f5f3', compact = false) {
   const c = safeColor(color) || '#f5f5f3';
-  const W = compact ? 380 : 560, H = 288, N = compact ? 60 : 80, L = compact ? 48 : 58, R = 8; // compact: schmaler gezeichnet, damit die Schrift auf dem Handy lesbar bleibt
+  const W = compact ? 380 : 560, H = 288, N = compact ? 90 : 120, L = compact ? 48 : 58, R = 8; // compact: schmaler gezeichnet, damit die Schrift auf dem Handy lesbar bleibt
   const X = (i) => L + (i * (W - L - R)) / (N - 1);
   const h = hist.slice(-N), off = N - h.length; // neue Daten füllen von rechts
   const sy = (v) => 168 - (Math.min(350, Math.max(0, v)) / 350) * 150;

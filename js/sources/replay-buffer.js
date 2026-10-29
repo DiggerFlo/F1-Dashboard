@@ -67,9 +67,14 @@ export function indexAtOrBefore(t, x) {
   return ans;
 }
 
-const rowAt = (c, i, fields, n) => {
-  const r = { driver_number: n, t: c.t[i] };
-  for (const f of fields) { const v = c[f][i]; r[f] = Number.isNaN(v) ? null : v; }
+const rowAt = (c, i, fields, n, t = c.t[i], mixed = null) => {
+  const r = { driver_number: n, t };
+  const j = mixed && i + 1 < c.t.length && t > c.t[i] && c.t[i + 1] - c.t[i] <= MAX_GAP ? i + 1 : -1;
+  const k = j >= 0 ? (t - c.t[i]) / (c.t[j] - c.t[i]) : 0;
+  for (const f of fields) {
+    const v = c[f][i];
+    r[f] = Number.isNaN(v) ? null : j >= 0 && mixed.includes(f) && !Number.isNaN(c[f][j]) ? v + (c[f][j] - v) * k : v;
+  }
   return r;
 };
 
@@ -77,9 +82,28 @@ const rowAt = (c, i, fields, n) => {
 export const columnsToJSON = (cols, fields) => Object.fromEntries([...cols].map(([n, c]) => [n, { t: Array.from(c.t), ...Object.fromEntries(fields.map((f) => [f, Array.from(c[f], (v) => (Number.isNaN(v) ? null : v))])) }]));
 export const columnsFromJSON = (obj, fields, Type = Float32Array) => new Map(Object.entries(obj).map(([n, c]) => [Number(n), { t: Float64Array.from(c.t), ...Object.fromEntries(fields.map((f) => [f, Type.from(c[f], (v) => (v == null ? NaN : v))])) }]));
 
-const latest = (byDriver, t) => {
+// Zwischen zwei Messungen wird linear überblendet (Geschwindigkeit, Gas, Bremse, Drehzahl, Position), damit der Wert zum Zeitpunkt t stimmt
+// und nicht der Messwert von bis zu einer Messung früher gilt. Gang und DRS bleiben beim letzten Wert. Über Lücken hinweg wird nicht überblendet.
+const INTERP = { carData: ['speed', 'throttle', 'brake', 'rpm'], location: ['x', 'y'] };
+const MAX_GAP = 1500; // ms
+
+const mix = (a, b, k) => (typeof a === 'number' && typeof b === 'number' ? a + (b - a) * k : a);
+
+/** Zeile zum Zeitpunkt t aus einer sortierten Liste, zwischen Vorgänger und Nachfolger überblendet. */
+function interpRow(arr, t, fields) {
+  const i = lastAtOrBefore(arr, t);
+  if (i < 0) return undefined;
+  const a = arr[i], b = arr[i + 1];
+  if (!fields || !b || t <= a.t || b.t - a.t > MAX_GAP) return a;
+  const k = (t - a.t) / (b.t - a.t);
+  const r = { ...a, t };
+  for (const f of fields) r[f] = mix(a[f], b[f], k);
+  return r;
+}
+
+const latest = (byDriver, t, fields) => {
   const out = new Map();
-  for (const [n, arr] of byDriver) { const i = lastAtOrBefore(arr, t); if (i >= 0) out.set(n, arr[i]); }
+  for (const [n, arr] of byDriver) { const r = interpRow(arr, t, fields); if (r) out.set(n, r); }
   return out;
 };
 
@@ -92,7 +116,7 @@ export function createReplayBuffer({ origin, windowMs = 4 * 60000, maxAge = 1.5 
   const STALE = { carData: 60000, location: 60000, intervals: Infinity }; // älter als das gilt ein Wert nicht mehr als aktuell
   const bulkLatest = (kind, t) => {
     const out = new Map();
-    for (const [n, c] of bulk[kind]) { const i = indexAtOrBefore(c.t, t); if (i >= 0 && t - c.t[i] <= STALE[kind]) out.set(n, rowAt(c, i, FIELDS[kind], n)); }
+    for (const [n, c] of bulk[kind]) { const i = indexAtOrBefore(c.t, t); if (i >= 0 && t - c.t[i] <= STALE[kind]) out.set(n, rowAt(c, i, FIELDS[kind], n, t, INTERP[kind])); }
     return out;
   };
 
@@ -171,7 +195,7 @@ export function createReplayBuffer({ origin, windowMs = 4 * 60000, maxAge = 1.5 
       const out = { carData: new Map(), location: new Map(), intervals: new Map(), position: latest(positions, t) };
       for (const w of [windows.get(startOf(t) - windowMs), windows.get(startOf(t))]) {
         if (!w) continue; // das ältere zuerst, das aktuelle überschreibt
-        for (const k of ['carData', 'location', 'intervals']) if (!bulk[k]) for (const [n, r] of latest(w[k], t)) out[k].set(n, r);
+        for (const k of ['carData', 'location', 'intervals']) if (!bulk[k]) for (const [n, r] of latest(w[k], t, INTERP[k])) out[k].set(n, r);
       }
       for (const k of ['carData', 'location', 'intervals']) if (bulk[k]) out[k] = bulkLatest(k, t);
       return out;

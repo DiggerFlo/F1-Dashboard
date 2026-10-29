@@ -6,7 +6,7 @@ import { tracesSvg } from '../../js/track.js';
 import { teamColor, tyreInfo } from '../../js/teams.js';
 import { FUEL_GAIN } from '../../js/tyres.js';
 import { t, dec } from '../../js/i18n.js';
-import { Html, Face, Tyre } from './bits.jsx';
+import { Html, Face, Tyre, Tween } from './bits.jsx';
 import { ShiftLights, Pedal, modeOf } from './Main.jsx';
 
 const DEG_HIGH = 0.08, DEG_LOW = 0.04; // s pro Runde: ab hier gilt der Abbau als hoch bzw. gering
@@ -123,11 +123,11 @@ export function LiveTab({ d, state, hist, refHist, color }) {
   return (
     <div className="dp-live">
       <div className="dp-speed">
-        <div className="dp-big"><span className="tv">{hasSpeed ? Math.round(d.speed) : '—'}</span><small>{t('unit.kmh')}</small></div>
+        <div className="dp-big"><span className="tv"><Tween value={hasSpeed ? d.speed : null} /></span><small>{t('unit.kmh')}</small></div>
         <div className="dp-gear" title={t('tbl.gear')}><span className="label">{t('tbl.gear')}</span><span className="tv">{d.gear == null ? '—' : d.gear === 0 ? 'N' : d.gear}</span></div>
       </div>
       <span className="sbar2"><i style={{ width: `${hasSpeed ? Math.min(100, (d.speed / 350) * 100) : 0}%` }} /></span>
-      <div className="dp-rpm"><ShiftLights rpm={d.rpm} /><span className="mono trv">{d.rpm != null ? `${dec((d.rpm / 1000).toFixed(1))}k` : '—'} <span className="muted">{t('tele.rpmUnit')}</span></span></div>
+      <div className="dp-rpm"><ShiftLights rpm={d.rpm} /><span className="mono trv">{d.rpm != null ? <><Tween value={d.rpm / 1000} format={(v) => `${dec(v.toFixed(1))}k`} /></> : '—'} <span className="muted">{t('tele.rpmUnit')}</span></span></div>
       <div className="dp-pedals"><Pedal label={t('tele.throttle')} v={d.throttle} cls="th" /><Pedal label={t('tele.brake')} v={d.brake} cls="br" /></div>
       <div className={`dp-mode${mode.on ? ' on' : ''}`}><span className="label">{mode.label}</span><strong>{mode.value}</strong>{mode.note && <span className="muted mono">{mode.note}</span>}</div>
       <Html className="dp-chart" html={tracesSvg(h, isQ ? refHist : null, color, true)} />

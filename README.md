@@ -66,6 +66,16 @@ Grenzen der OpenF1-Anbindung: Funk gibt es nur als Audio (Transkript über die A
 - **Teamfarben:** Punkte auf der Karte, ein Balken neben dem Kürzel in den Tabellen und die Überholhinweise tragen die Teamfarbe. Die Demo (Simulation) nutzt erfundene Teams mit eigenen Farben, mit OpenF1 kommen die echten Farben aus `team_colour` (`color`/`team` im Fahrer-Zustand). Farben werden vor der Verwendung als `#rrggbb` geprüft. Der Leader hat zusätzlich einen roten Ring. Die Timing-Farben (Lila/Grün/Gelb) bleiben der Zeitenanzeige vorbehalten.
 - **Flüssige Bewegung:** Die Daten kommen nur alle 0,5 bis 2 s. Ein Animator (`createCarAnimator`) rechnet jede Position auf den Anteil der Runde um und fährt zwischen zwei Datenständen entlang der Strecke (nicht auf der Sehne, auch über die Ziellinie), 60 Bilder pro Sekunde. Die Anzeige läuft dadurch ein Update hinter den Daten her. Große Sprünge (Boxengasse, Neustart) werden nicht überblendet.
 
+## Gleichmäßige Bewegung und Verläufe
+
+Die Daten kommen nur alle 0,5 bis 2 s; damit nichts springt, wird auf drei Ebenen geglättet:
+
+- **Quelle:** In der Wiederholung werden Geschwindigkeit, Gas, Bremse, Drehzahl und Position zwischen den beiden benachbarten Messungen linear überblendet (Gang und DRS bleiben beim letzten Wert, über Lücken über 1,5 s wird nicht geraten). Der Zustand zeigt damit genau den Zeitpunkt der Anzeige, nicht den letzten Messwert davor. Zusätzlich liefert jeder Zustand alle Messwerte seit dem vorigen (`trail`, rund 4 pro Sekunde): der Verlauf der Telemetrie (bis 120 Punkte, Fenster von rund 30 s) ist feiner als die Takte der Anzeige. Die Demo rechnet dafür mehrere Teilschritte je Takt.
+- **Karte:** `createCarAnimator` schätzt je Auto Ziel und Tempo (Anteil der Runde) und rechnet das Ziel mit diesem Tempo weiter; die Anzeige folgt ihm mit 180 ms Trägheit, 60 Bilder pro Sekunde. Unregelmäßig eintreffende Zustände führen so nicht mehr zu Stehenbleiben und Aufholen. Autos fahren nie rückwärts, große Sprünge (Boxengasse, Neustart) werden nicht überblendet.
+- **Anzeigen:** Zahlen (Geschwindigkeit, Drehzahl, Pedale in Prozent) gleiten mit `Tween` zum neuen Wert, Balken (Tempo, Gas, Bremse) mit einer linearen CSS-Überblendung. Beide nutzen den gemessenen Takt der Quelle (`src/tick.js`, CSS-Variable `--tick`).
+
+Die Demo hat dazu einen Mindestabstand zwischen den Autos (rund 0,25 s) und echte Überholmanöver: Wer deutlich schneller ist, zieht vorbei, sonst folgt er. Vorher blieben Teamkollegen mit gleichem Tempo aufeinander kleben und tauschten dauernd die Plätze, was die Überholhinweise überflutete.
+
 ## Überholhinweise
 
 Wenn im Rennen ein Auto ein anderes überholt, fährt oben rechts ein kleiner Hinweis herein („MOR überholt KRN · P2“), maximal vier gleichzeitig, jeweils 5 Sekunden. Erkannt wird aus dem Vergleich zweier Zustände, also mit jeder Datenquelle. Nicht gemeldet werden Positionswechsel durch Boxenstopps, unter Safety Car/VSC/Rot, nach der Zielflagge und außerhalb des Rennens. Der Schalter „Überholungen an/aus“ in der Kopfzeile schaltet die Hinweise ab. Hinweise werden den Screenreadern vorgelesen (`aria-live`) und respektieren „Bewegung reduzieren“.
