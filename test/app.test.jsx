@@ -6,7 +6,8 @@ import { lightsFor, isRaceLabel } from '../js/startlights.js';
 import { detectRetirements } from '../js/pitstops.js';
 import { createDemoEngine, createDemoSource } from '../js/sources/demo.js';
 import { flagFromControl, overtakeFromControl, latestBy, mergeUpcoming, createOpenF1Client, createOpenF1Source } from '../js/sources/openf1.js';
-import { createReplayBuffer, lastAtOrBefore } from '../js/sources/replay-buffer.js';
+import { createReplayBuffer, lastAtOrBefore, toColumns, columnsToJSON, columnsFromJSON, CAR_FIELDS, IV_FIELDS } from '../js/sources/replay-buffer.js';
+import { createBulkCache } from '../js/cache.js';
 import { mapDriverStandings, mapConstructorStandings, mapRaces, mapLastResult, buildJolpicaCalendar, createJolpica } from '../js/sources/jolpica.js';
 import { fmtLap, fmtGap, fmtClock, sectorClass, esc, splitCountdown } from '../js/format.js';
 import { readFileSync } from 'node:fs';
@@ -1255,4 +1256,159 @@ test('Navigation: Rennauswahl mit Flagge, Blättern und Auswahl der Session in d
   assert.ok(out.includes('>Sprint<') && !out.includes('Sprint-Quali'), 'nur vorhandene Sessions');
   assert.ok(!out.includes('rb-sess'), 'Auswahl wohnt nicht mehr in der Transportleiste');
   assert.ok(out.includes('replaybar'), 'Transportleiste bleibt');
+});
+
+// ---------- Ganze Session statt Fenster für Fenster ----------
+
+test('buffer: whole-session columns (sorted, text gaps become null, JSON round trip)', () => {
+  const rows = [
+    { driver_number: 1, date: '2025-01-01T00:00:03.000+00:00', speed: 300, throttle: 100, brake: 0, n_gear: 8, rpm: 11000, drs: 12 },
+    { driver_number: 1, date: '2025-01-01T00:00:01.000+00:00', speed: 100, throttle: 50, brake: 0, n_gear: 3, rpm: 8000, drs: 0 }, // unsortiert
+    { driver_number: 2, date: '2025-01-01T00:00:02.000+00:00', speed: 0, throttle: 0, brake: 100, n_gear: 0, rpm: 4000, drs: 0 },
+  ];
+  const cols = toColumns(rows, CAR_FIELDS);
+  assert.deepEqual([...cols.get(1).speed], [100, 300], 'nach Zeit sortiert');
+  assert.ok(cols.get(1).t[0] < cols.get(1).t[1]);
+  const back = columnsFromJSON(columnsToJSON(cols, CAR_FIELDS), CAR_FIELDS);
+  assert.deepEqual([...back.get(1).speed], [100, 300]);
+  const iv = toColumns([{ driver_number: 1, date: '2025-01-01T00:00:01.000+00:00', gap_to_leader: '+1 LAP', interval: 0.123 }], IV_FIELDS, Float64Array);
+  const b = createReplayBuffer({ origin: 0 });
+  b.setBulk('intervals', iv);
+  const smp = b.sample(Date.parse('2025-01-01T00:00:05Z'));
+  assert.equal(smp.intervals.get(1).gap_to_leader, null);
+  assert.equal(smp.intervals.get(1).interval, 0.123, 'Sekundenbruchteile bleiben exakt');
+});
+
+test('buffer: with whole-session data every time is covered, windows are dropped, stale values are not shown', () => {
+  const t0 = Date.parse('2025-01-01T00:00:00Z');
+  const b = createReplayBuffer({ origin: t0, windowMs: 60000 });
+  b.add(t0, { carData: [{ driver_number: 1, date: new Date(t0 + 1000).toISOString(), speed: 50 }] });
+  assert.equal(b.has(t0 + 3600000), false);
+  const car = [], loc = [];
+  for (let i = 0; i < 600; i++) { car.push({ driver_number: 1, date: new Date(t0 + i * 1000).toISOString(), speed: i < 10 ? 0 : 200, throttle: 0, brake: 0, n_gear: 1, rpm: 1, drs: 0 }); loc.push({ driver_number: 1, date: new Date(t0 + i * 1000).toISOString(), x: i, y: -i }); }
+  b.setBulk('carData', toColumns(car, CAR_FIELDS));
+  assert.equal(b.has(t0 + 100000), false, 'erst mit Telemetrie UND Positionsdaten ist die Session abgedeckt');
+  b.setBulk('location', toColumns(loc, ['x', 'y']));
+  assert.equal(b.has(t0 + 3600000), true);
+  assert.equal(b.size, 0, 'Fenster freigegeben');
+  const s = b.sample(t0 + 300500);
+  assert.equal(s.carData.get(1).speed, 200);
+  assert.equal(s.location.get(1).x, 300);
+  assert.equal(b.sample(t0 + 3600000).carData.size, 0, 'nach dem Ende der Daten kein Geisterauto');
+  assert.equal(b.moved(1, t0, t0 + 5000), false);
+  assert.equal(b.moved(1, t0 + 20000, t0 + 25000), true);
+  assert.equal(b.moved(9, t0, t0 + 5000), null, 'unbekannter Fahrer');
+  assert.deepEqual(b.firstMoves(t0, t0 + 60000), [t0 + 10000]);
+  const { rows, covered } = b.carRows(1, t0 + 10000, t0 + 12000);
+  assert.equal(covered, true);
+  assert.deepEqual(rows.map((r) => r.speed), [200, 200, 200]);
+});
+
+/** Dichte Telemetrie (1 Hz) für zwei Fahrer rund um den Start, antwortet wie OpenF1 auf date>=/date<-Filter. */
+const denseRace = (extra = {}) => {
+  const base = fakeRace();
+  const t0 = Date.parse(base.session.date_start) + 2 * 60000;
+  const rowsFor = (ep) => {
+    const out = [];
+    for (let i = -300; i < 1800; i++) for (const n of [1, 16]) {
+      const date = new Date(t0 + i * 1000).toISOString();
+      if (ep === 'car_data') out.push({ driver_number: n, date, speed: n === 1 ? 280 : 150, throttle: 100, brake: 0, n_gear: 7, rpm: 11000, drs: n === 1 ? 12 : 0 });
+      else if (ep === 'location') out.push({ driver_number: n, date, x: 100 + i, y: 200 });
+      else out.push({ driver_number: n, date, gap_to_leader: n === 1 ? 1.2 : 0, interval: n === 1 ? 1.2 : 0 });
+    }
+    return out;
+  };
+  const cache = {};
+  const calls = [];
+  const client = async (path) => {
+    const [ep, q = ''] = path.split('?');
+    if (!['car_data', 'location', 'intervals'].includes(ep)) return base.client(path);
+    calls.push(path);
+    if (extra.failWhole && !/date/.test(q) && ep !== 'intervals') throw new Error('OpenF1 422');
+    const all = (cache[ep] ||= rowsFor(ep));
+    const from = /date(?:>|%3E)=?([^&]+)/.exec(q), to = /date(?:<|%3C)([^&]+)/.exec(q);
+    const lo = from ? Date.parse(decodeURIComponent(from[1])) : -Infinity, hi = to ? Date.parse(decodeURIComponent(to[1])) : Infinity;
+    return all.filter((r) => { const x = Date.parse(r.date); return x >= lo && x < hi; });
+  };
+  return { ...base, client, calls };
+};
+const mem = () => { const m = new Map(); return { read: async (k) => m.get(k), write: async (k, v) => { m.set(k, JSON.parse(JSON.stringify(v))); return true; }, size: () => m.size }; };
+
+test('replay source: loads the whole session once, then needs no windows for any time', async () => {
+  const { client, jolpica, calls } = denseRace();
+  const src = createOpenF1Source({ client, jolpica, replayOnly: true, speed: 1, bulkCache: mem() });
+  const states = [];
+  src.start((s) => states.push(s));
+  await waitFor(() => states.some((s) => s.drivers.length && s.drivers[0].speed != null));
+  await waitFor(() => calls.some((c) => c === 'location?session_key=1'), 4000);
+  await new Promise((r) => setTimeout(r, 300));
+  const whole = (ep) => calls.filter((c) => c === `${ep}?session_key=1`);
+  assert.equal(whole('car_data').length, 1);
+  assert.equal(whole('location').length, 1);
+  assert.equal(whole('intervals').length, 1, 'Abstände: ganze Session mit einer Anfrage');
+  assert.equal(calls.filter((c) => c.startsWith('intervals') && /date/.test(c)).length, 0, 'keine Abstände pro Fenster');
+  const n = calls.length;
+  src.pause(true); src.seek(0.02); // weit hinter das erste Fenster springen
+  await waitFor(() => states.at(-1).replay && !states.at(-1).replay.loading && states.at(-1).replay.t > states[0].replay.start + 100000);
+  assert.equal(calls.length, n, 'Springen kostet keine Anfrage mehr');
+  const s = states.at(-1);
+  assert.equal(s.drivers.find((d) => d.code === 'NOR').speed, 280);
+  assert.equal(s.drivers.find((d) => d.code === 'NOR').gap, 1.2);
+  src.stop();
+});
+
+test('replay source: falls back to time windows when the whole session cannot be loaded', async () => {
+  const { client, jolpica, calls } = denseRace({ failWhole: true });
+  const src = createOpenF1Source({ client, jolpica, replayOnly: true, speed: 1, bulkCache: mem() });
+  const states = [];
+  src.start((s) => states.push(s));
+  await waitFor(() => states.some((s) => s.drivers.length && s.drivers[0].speed != null));
+  await new Promise((r) => setTimeout(r, 400));
+  assert.ok(calls.some((c) => c.startsWith('car_data') && /date/.test(c)), 'Fenster wie bisher');
+  assert.equal(states.at(-1).drivers.find((d) => d.code === 'NOR').speed, 280);
+  assert.equal(states.at(-1).problem || '', '', 'der Fallback ist kein Fehler für die Anzeige');
+  src.stop();
+});
+
+test('replay source: bulk=false keeps the old window loading', async () => {
+  const { client, jolpica, calls } = denseRace();
+  const src = createOpenF1Source({ client, jolpica, replayOnly: true, speed: 1, bulk: false });
+  const states = [];
+  src.start((s) => states.push(s));
+  await waitFor(() => states.some((s) => s.drivers.length && s.drivers[0].speed != null));
+  await new Promise((r) => setTimeout(r, 300));
+  assert.ok(!calls.some((c) => /^(car_data|location|intervals)\?session_key=1$/.test(c)), 'keine Anfrage für die ganze Session');
+  assert.ok(calls.some((c) => c.startsWith('car_data') && /date/.test(c)));
+  src.stop();
+});
+
+test('replay source: second visit of a session is served from the cache without telemetry requests', async () => {
+  const bulkCache = mem();
+  const a = denseRace();
+  const first = createOpenF1Source({ client: a.client, jolpica: a.jolpica, replayOnly: true, speed: 1, bulkCache });
+  const st1 = [];
+  first.start((s) => st1.push(s));
+  await waitFor(() => bulkCache.size() >= 3, 6000);
+  first.stop();
+  const b = denseRace();
+  const second = createOpenF1Source({ client: b.client, jolpica: b.jolpica, replayOnly: true, speed: 1, bulkCache });
+  const st2 = [];
+  second.start((s) => st2.push(s));
+  await waitFor(() => st2.some((s) => s.drivers.length && s.drivers[0].speed != null));
+  await new Promise((r) => setTimeout(r, 400));
+  assert.equal(b.calls.length, 0, 'weder Fenster noch ganze Session: alles aus dem Cache');
+  assert.equal(st2.at(-1).drivers.find((d) => d.code === 'NOR').speed, 280);
+  second.stop();
+});
+
+test('bulk cache: stores and reads through a Cache Storage, drops the oldest, never throws', async () => {
+  const store = new Map();
+  const fakeCaches = { open: async () => ({ put: async (k, r) => { store.set(k, await r.text()); }, match: async (k) => (store.has(k) ? new Response(store.get(k)) : undefined), keys: async () => [...store.keys()], delete: async (k) => store.delete(k) }) };
+  const c = createBulkCache(fakeCaches, { maxEntries: 2 });
+  assert.equal(await c.write('car_data?session_key=1', { a: 1 }), true);
+  assert.deepEqual(await c.read('car_data?session_key=1'), { a: 1 });
+  await c.write('b', 2); await c.write('c', 3);
+  assert.equal(await c.read('car_data?session_key=1'), undefined, 'ältester Eintrag entfernt');
+  assert.equal(await createBulkCache(null).read('x'), undefined);
+  assert.equal(await createBulkCache(null).write('x', 1), false);
 });

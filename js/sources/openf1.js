@@ -6,8 +6,8 @@ import { buildOpenF1Calendar } from '../calendar.js';
 import { samplePath } from '../svgpath.js';
 import { fitSimilarity } from '../fit.js';
 import { createJolpica, buildJolpicaCalendar } from './jolpica.js';
-import { createReplayBuffer } from './replay-buffer.js';
-import { createStaticCache, cacheKeyOf } from '../cache.js';
+import { createReplayBuffer, toColumns, columnsToJSON, columnsFromJSON, CAR_FIELDS, LOC_FIELDS, IV_FIELDS } from './replay-buffer.js';
+import { createStaticCache, createBulkCache, cacheKeyOf } from '../cache.js';
 import { t as tr, locale } from '../i18n.js';
 import { liveSessionNow, looksLikeBlock, focusSession } from '../livelock.js';
 import { sessionLabel, sessionKind, baseType } from '../sessions.js';
@@ -154,7 +154,7 @@ export function mergeUpcoming(upcoming, extras, now = Date.now()) {
   return out;
 }
 
-export function createOpenF1Source({ token = null, speed = 8, wantType = null, sessionKey = null, jolpica = createJolpica(), client = null, replayOnly = false, circuitInfo = fetchCircuitInfo, cache = createStaticCache() } = {}) {
+export function createOpenF1Source({ token = null, speed = 8, wantType = null, sessionKey = null, jolpica = createJolpica(), client = null, replayOnly = false, circuitInfo = fetchCircuitInfo, cache = createStaticCache(), bulk = true, bulkCache = createBulkCache() } = {}) {
   let timer = null, stopped = false, onState = null;
   let session = null, upcoming = null, replay = false;
   let weekend = []; // alle Sessions des Wochenendes der geladenen Session: [{ key, name, kind, start, end }]
@@ -166,6 +166,7 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
   let stopBusy = 0; // laufende Einzelabfragen für Standzeiten (die Warteschlange ist knapp: höchstens 28 Anfragen pro Minute) // Ausfälle erkennen, Standzeiten der Boxenstopps
   let lastBuildNow = null;
   const windowLoads = new Map();
+  let bulkRun = null, bulkFailed = false; // ganze Session für Telemetrie/Positionen im Hintergrund (statt Fenster für Fenster)
   if (replayOnly && !wantType && !sessionKey) wantType = 'race';
   let toTrack = (x, y) => [x, y], drivers = new Map(), carData = new Map(), loc = new Map(), pos = new Map(), intervals = new Map(), laps = [], stints = [], control = [], radioRows = [], weather = null, track = null;
   let initFails = 0; // aufeinanderfolgende Fehlversuche beim Start einer Session: der Abstand zwischen den Versuchen wächst
@@ -303,7 +304,7 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
 
   async function loadStatic() {
     const k = session.session_key;
-    intervals = new Map(); pos = new Map(); carData = new Map(); loc = new Map(); laps = []; stints = []; control = []; radioRows = []; weather = null; weatherRows = []; pits = []; buffer = null; loadingNow = false; windowLoads.clear(); stopCache.clear(); stopLoading.clear(); stopSince.clear(); gridSince.clear(); dnsCache.clear(); dnsChecked.clear();
+    intervals = new Map(); pos = new Map(); carData = new Map(); loc = new Map(); laps = []; stints = []; control = []; radioRows = []; weather = null; weatherRows = []; pits = []; buffer = null; loadingNow = false; windowLoads.clear(); bulkRun = null; bulkFailed = false; stopCache.clear(); stopLoading.clear(); stopSince.clear(); gridSince.clear(); dnsCache.clear(); dnsChecked.clear();
     const ds = await get(`drivers?session_key=${k}`);
     drivers = new Map(ds.map((d) => [d.driver_number, d]));
     // Streckenlayout: Positionsdaten einer Runde eines Fahrers, auf das Layout aus f1-circuits-svg abgebildet
@@ -381,6 +382,51 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
     clock = { ...clock, base: replayEntry(), at: Date.now() }; // Rennen: jetzt ist der Start bekannt
     buffer = createReplayBuffer({ origin: sessionStart() });
     buffer.setPositions(await get(`position?session_key=${k}`));
+    if (!bulk) return;
+    const my = epoch, buf = buffer;
+    try {
+      const iv = await fetchBulk('intervals', k, my); // Abstände sind klein: ganze Session mit einer Anfrage
+      if (my === epoch && buf === buffer && iv.size) buf.setBulk('intervals', iv);
+      if (pastKeys.has(Number(k))) { // Telemetrie und Positionen: nur aus dem Cache, das Herunterladen folgt im Hintergrund (startBulk)
+        for (const kind of ['carData', 'location']) {
+          const hit = await bulkCache.read(`${BULK[kind][0]}?session_key=${k}`);
+          if (hit && my === epoch && buf === buffer) buf.setBulk(kind, columnsFromJSON(hit, BULK[kind][1], BULK[kind][2]));
+        }
+      }
+    } catch { /* ohne die ganze Session laufen die Zeitfenster wie bisher */ }
+  }
+
+  const BULK = { intervals: ['intervals', IV_FIELDS, Float64Array], carData: ['car_data', CAR_FIELDS, Float32Array], location: ['location', LOC_FIELDS, Float32Array] };
+
+  /** Ganze Session eines Datenstroms in Spaltenform: erst der Cache (beendete Sessions), sonst eine Anfrage. */
+  async function fetchBulk(kind, k, my) {
+    const [ep, fields, Type] = BULK[kind];
+    const path = `${ep}?session_key=${k}`;
+    const cacheable = pastKeys.has(Number(k));
+    if (cacheable) { const hit = await bulkCache.read(path); if (hit) return columnsFromJSON(hit, fields, Type); }
+    const rows = await rawGet(path, () => my !== epoch);
+    const cols = toColumns(rows, fields, Type);
+    if (cacheable && cols.size) bulkCache.write(path, columnsToJSON(cols, fields));
+    return cols;
+  }
+
+  /**
+   * Telemetrie und Positionen der ganzen Session mit je einer Anfrage laden, sobald das erste Zeitfenster steht (schneller Start).
+   * Gelingt das, sind die Zeitfenster überflüssig; schlägt es fehl (zu groß, Zeitlimit), laden sie weiter wie bisher.
+   */
+  function startBulk() {
+    if (!bulk || bulkRun || bulkFailed || !replay || !buffer || !session) return;
+    const my = epoch, buf = buffer, k = session.session_key;
+    const need = ['carData', 'location'].filter((kind) => !buf.hasBulk(kind));
+    if (!need.length) return;
+    bulkRun = (async () => {
+      for (const kind of need) {
+        const cols = await fetchBulk(kind, k, my);
+        if (my !== epoch || buf !== buffer) return;
+        if (!cols.size) throw new Error('leer');
+        buf.setBulk(kind, cols);
+      }
+    })().catch(() => { bulkFailed = true; }).finally(() => { bulkRun = null; });
   }
 
   /** Ein Zeitfenster (Telemetrie, Positionen, Abstände aller Fahrer) laden. Mehrfachaufrufe teilen sich die Anfrage. */
@@ -389,7 +435,11 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
     const buf = buffer, k = session.session_key;
     const q = (ep) => get(`${ep}?session_key=${k}&date>=${enc(iso(start))}&date<${enc(iso(start + buf.windowMs))}`);
     const p = (async () => {
-      const carData = await q('car_data'), location = await q('location'), intervals = await q('intervals');
+      if (bulkRun) await bulkRun; // die ganze Session ist unterwegs: abwarten statt zusätzlich Fenster zu laden
+      if (buf !== buffer || buf.has(start)) return;
+      const carData = buf.hasBulk('carData') ? [] : await q('car_data');
+      const location = buf.hasBulk('location') ? [] : await q('location');
+      const intervals = buf.hasBulk('intervals') ? [] : await q('intervals');
       if (buf === buffer) buf.add(start, { carData, location, intervals });
     })().finally(() => windowLoads.delete(start));
     windowLoads.set(start, p);
@@ -552,6 +602,7 @@ export function createOpenF1Source({ token = null, speed = 8, wantType = null, s
         const next = buffer.startOf(t) + buffer.windowMs;
         if (t > next - buffer.windowMs * 0.65 && next < sessionEnd() && !buffer.has(next)) loadWindow(next).catch(() => {});
       }
+      startBulk();
       const smp = buffer.sample(t);
       carData = smp.carData; intervals = smp.intervals; pos = smp.position;
       loc = new Map([...smp.location].map(([n, p]) => { const [x, y] = toTrack(p.x, -p.y); return [n, { x, y }]; }));
