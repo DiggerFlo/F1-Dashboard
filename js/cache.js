@@ -44,3 +44,28 @@ export function createStaticCache(storage = globalThis.localStorage, { prefix = 
     },
   };
 }
+
+/**
+ * Dauerhafter Cache (Cache Storage des Browsers) für die ganze Session von Telemetrie, Positionen und Abständen.
+ * Diese Daten sind für localStorage viel zu groß (5 MB), im Cache Storage finden mehrere Sessions Platz.
+ * Gespeichert wird die Spaltenform (siehe replay-buffer.js), nicht die Rohantwort. Fehler sind nie kritisch.
+ */
+export function createBulkCache(cacheStorage = globalThis.caches, { name = 'pitwall-of1-bulk', maxEntries = 9 } = {}) {
+  const key = (path) => `https://pitwall.invalid/bulk/${path}`; // nur ein Schlüssel, wird nie abgerufen
+  const open = async () => (cacheStorage ? cacheStorage.open(name) : null);
+  return {
+    async read(path) {
+      try { const c = await open(); const r = c && (await c.match(key(path))); return r ? await r.json() : undefined; } catch { return undefined; }
+    },
+    async write(path, data) {
+      try {
+        const c = await open();
+        if (!c) return false;
+        await c.put(key(path), new Response(JSON.stringify(data), { headers: { 'Content-Type': 'application/json' } }));
+        const keys = await c.keys(); // älteste Einträge zuerst entfernen
+        for (let i = 0; i < keys.length - maxEntries; i++) await c.delete(keys[i]);
+        return true;
+      } catch { return false; }
+    },
+  };
+}

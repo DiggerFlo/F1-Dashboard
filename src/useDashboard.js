@@ -18,7 +18,7 @@ function makeSource(params) {
   const src = params.get('source');
   const common = { token: params.get('token'), sessionKey: params.get('session'), wantType: params.get('type') };
   if (src === 'sim') return createDemoSource({ scenario: params.get('scenario') || 'auto' });
-  return createOpenF1Source({ ...common, speed: Number(params.get('speed')) || 2 });
+  return createOpenF1Source({ ...common, speed: Number(params.get('speed')) || 2, bulk: params.get('bulk') !== '0' });
 }
 
 /**

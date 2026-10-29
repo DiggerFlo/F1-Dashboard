@@ -26,6 +26,57 @@ export function groupByDriver(rows) {
   return m;
 }
 
+// ---------- Ganze Session in Spaltenform ----------
+// Eine komplette Session hat bei Telemetrie und Positionen einige hunderttausend Zeilen. Als Objekte wären das über 50 MB;
+// je Fahrer in Float64Array (Zeit) und Float32Array (Werte) sind es rund ein Drittel, und die Suche nach "letzter Wert bis t" bleibt binär.
+
+export const CAR_FIELDS = ['speed', 'throttle', 'brake', 'n_gear', 'rpm', 'drs'];
+export const LOC_FIELDS = ['x', 'y'];
+export const IV_FIELDS = ['gap_to_leader', 'interval'];
+
+const num = (v) => (typeof v === 'number' ? v : NaN); // Text wie "+1 LAP" wird zu NaN und später zu null
+
+/** Rohzeilen -> Map(Fahrer -> { t: Float64Array, <Feld>: Float32Array (oder Type), ... }), nach Zeit sortiert. Abstände brauchen Float64 (Sekundenbruchteile). */
+export function toColumns(rows, fields, Type = Float32Array) {
+  const per = new Map();
+  for (const r of rows) {
+    const t = time(r);
+    if (!isFinite(t)) continue;
+    const a = per.get(r.driver_number);
+    if (a) a.push(r, t); else per.set(r.driver_number, [r, t]);
+  }
+  const out = new Map();
+  for (const [n, flat] of per) {
+    const len = flat.length / 2;
+    const idx = Array.from({ length: len }, (_, i) => i);
+    let sorted = true;
+    for (let i = 1; i < len; i++) if (flat[2 * i + 1] < flat[2 * i - 1]) { sorted = false; break; }
+    if (!sorted) idx.sort((a, b) => flat[2 * a + 1] - flat[2 * b + 1]);
+    const c = { t: new Float64Array(len) };
+    for (const f of fields) c[f] = new Type(len);
+    idx.forEach((src, i) => { c.t[i] = flat[2 * src + 1]; for (const f of fields) c[f][i] = num(flat[2 * src][f]); });
+    out.set(n, c);
+  }
+  return out;
+}
+
+/** Letzter Index mit t <= x in einem sortierten Float64Array, sonst -1. */
+export function indexAtOrBefore(t, x) {
+  let lo = 0, hi = t.length - 1, ans = -1;
+  while (lo <= hi) { const mid = (lo + hi) >> 1; if (t[mid] <= x) { ans = mid; lo = mid + 1; } else hi = mid - 1; }
+  return ans;
+}
+
+const rowAt = (c, i, fields, n) => {
+  const r = { driver_number: n, t: c.t[i] };
+  for (const f of fields) { const v = c[f][i]; r[f] = Number.isNaN(v) ? null : v; }
+  return r;
+};
+
+/** Spalten für den Browser-Cache: Typed Arrays -> normale Arrays (JSON) und zurück. */
+export const columnsToJSON = (cols, fields) => Object.fromEntries([...cols].map(([n, c]) => [n, { t: Array.from(c.t), ...Object.fromEntries(fields.map((f) => [f, Array.from(c[f], (v) => (Number.isNaN(v) ? null : v))])) }]));
+export const columnsFromJSON = (obj, fields, Type = Float32Array) => new Map(Object.entries(obj).map(([n, c]) => [Number(n), { t: Float64Array.from(c.t), ...Object.fromEntries(fields.map((f) => [f, Type.from(c[f], (v) => (v == null ? NaN : v))])) }]));
+
 const latest = (byDriver, t) => {
   const out = new Map();
   for (const [n, arr] of byDriver) { const i = lastAtOrBefore(arr, t); if (i >= 0) out.set(n, arr[i]); }
@@ -35,13 +86,25 @@ const latest = (byDriver, t) => {
 export function createReplayBuffer({ origin, windowMs = 4 * 60000, maxAge = 1.5 }) {
   const windows = new Map(); // Fensterstart -> { carData, location, intervals } (je Map: Fahrer -> Zeilen)
   let positions = new Map();
+  // Ganze Session je Datenstrom (Spaltenform); solange ein Strom hier fehlt, kommt er aus den Zeitfenstern
+  const bulk = { carData: null, location: null, intervals: null };
+  const FIELDS = { carData: CAR_FIELDS, location: LOC_FIELDS, intervals: IV_FIELDS };
+  const STALE = { carData: 60000, location: 60000, intervals: Infinity }; // älter als das gilt ein Wert nicht mehr als aktuell
+  const bulkLatest = (kind, t) => {
+    const out = new Map();
+    for (const [n, c] of bulk[kind]) { const i = indexAtOrBefore(c.t, t); if (i >= 0 && t - c.t[i] <= STALE[kind]) out.set(n, rowAt(c, i, FIELDS[kind], n)); }
+    return out;
+  };
 
   const startOf = (t) => origin + Math.floor((t - origin) / windowMs) * windowMs;
 
   return {
     windowMs,
     startOf,
-    has: (t) => windows.has(startOf(t)),
+    has: (t) => Boolean(bulk.carData && bulk.location) || windows.has(startOf(t)),
+    /** Eine ganze Session für einen Datenstrom ('carData' | 'location' | 'intervals') ablegen. */
+    setBulk(kind, cols) { bulk[kind] = cols; if (bulk.carData && bulk.location) windows.clear(); },
+    hasBulk: (kind) => bulk[kind] != null,
     /** Rohdaten eines Fensters ablegen. */
     add(start, { carData = [], location = [], intervals = [] }) {
       windows.set(start, { carData: groupByDriver(carData), location: groupByDriver(location), intervals: groupByDriver(intervals) });
@@ -49,6 +112,11 @@ export function createReplayBuffer({ origin, windowMs = 4 * 60000, maxAge = 1.5 
     setPositions(rows) { positions = groupByDriver(rows); },
     /** Telemetriezeilen { t, speed, ... } eines Fahrers in [from, to] aus den geladenen Fenstern; covered: alle betroffenen Fenster waren geladen. */
     carRows(num, from, to) {
+      if (bulk.carData) {
+        const c = bulk.carData.get(num), rows = [];
+        if (c) for (let i = Math.max(0, indexAtOrBefore(c.t, from - 1) + 1); i < c.t.length && c.t[i] <= to; i++) rows.push(rowAt(c, i, CAR_FIELDS, num));
+        return { rows, covered: true };
+      }
       const rows = [];
       let covered = true;
       for (let st = startOf(from); st <= to; st += windowMs) {
@@ -61,6 +129,12 @@ export function createReplayBuffer({ origin, windowMs = 4 * 60000, maxAge = 1.5 
     /** Je Fahrer der Zeitpunkt, an dem er in [from, to] erstmals schneller als minSpeed fährt (nur aus geladenen Fenstern). */
     firstMoves(from, to, minSpeed = 3) {
       const out = [];
+      if (bulk.carData) {
+        for (const c of bulk.carData.values()) {
+          for (let i = Math.max(0, indexAtOrBefore(c.t, from - 1) + 1); i < c.t.length && c.t[i] <= to; i++) if (c.speed[i] >= minSpeed) { out.push(c.t[i]); break; }
+        }
+        return out;
+      }
       for (const [start, w] of windows) {
         if (start > to || start + windowMs < from) continue;
         for (const arr of w.carData.values()) {
@@ -74,6 +148,13 @@ export function createReplayBuffer({ origin, windowMs = 4 * 60000, maxAge = 1.5 
      * Hat sich der Fahrer in [from, to] mit mindestens minSpeed bewegt? null, wenn der Zeitraum nicht vollständig geladen ist oder es keine Daten zum Fahrer gibt.
      */
     moved(driver, from, to, minSpeed = 3) {
+      if (bulk.carData) {
+        const c = bulk.carData.get(driver);
+        if (!c) return null;
+        let any = false;
+        for (let i = Math.max(0, indexAtOrBefore(c.t, from - 1) + 1); i < c.t.length && c.t[i] <= to; i++) { any = true; if (c.speed[i] >= minSpeed) return true; }
+        return any ? false : null;
+      }
       for (let w = startOf(from); w <= to; w += windowMs) if (!windows.has(w)) return null;
       let any = false;
       for (const [start, w] of windows) {
@@ -90,13 +171,14 @@ export function createReplayBuffer({ origin, windowMs = 4 * 60000, maxAge = 1.5 
       const out = { carData: new Map(), location: new Map(), intervals: new Map(), position: latest(positions, t) };
       for (const w of [windows.get(startOf(t) - windowMs), windows.get(startOf(t))]) {
         if (!w) continue; // das ältere zuerst, das aktuelle überschreibt
-        for (const k of ['carData', 'location', 'intervals']) for (const [n, r] of latest(w[k], t)) out[k].set(n, r);
+        for (const k of ['carData', 'location', 'intervals']) if (!bulk[k]) for (const [n, r] of latest(w[k], t)) out[k].set(n, r);
       }
+      for (const k of ['carData', 'location', 'intervals']) if (bulk[k]) out[k] = bulkLatest(k, t);
       return out;
     },
     /** Fenster verwerfen, die mehr als maxAge Fensterlängen zurückliegen. */
     evict(t) { for (const s of windows.keys()) if (s < startOf(t) - windowMs * maxAge) windows.delete(s); },
-    clear() { windows.clear(); },
+    clear() { windows.clear(); bulk.carData = bulk.location = bulk.intervals = null; },
     get size() { return windows.size; },
   };
 }
